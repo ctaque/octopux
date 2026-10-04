@@ -1,0 +1,181 @@
+//                         -----
+//                     -------------
+//                   -----  ----------
+//                  ---  --------------
+//                 ---  ----------------
+//                 --- -----------------
+//                 --- -----------------
+//                 --- -----------------
+//                 ---------------------
+//       -----      -------------------       -----
+//      -------      --  ---------- --      -------
+//          ----      ---------------      -----
+//           ---      ---------------      ----
+//          ----     -----------------     ----
+//        ------   ----------------------   ------
+//    --------  ---------------------------  --------
+//   ------   -------------------------- ----   -------
+//  ----    -----  ---------- --- ------- -----    -----
+// ----  ------  -------- --- --- ---- ---  ------  ----
+// ----        ---- ----  --- ---- ---- -----       ----
+//  ----   ------  ----  ---- ----  ----   ------  -----
+//  ------      ------   ---- -----  ------      ------
+//    ---------------    ----  ----    --------------
+//      ----------       ----  ----      ----------
+//                       ----  ----
+//                 ---   ---- -----   --
+//               ------  ---- ----- -------
+//              -------  ---- ----- --------
+//              ----    ----   -----    ----
+//              -----------     -----------
+//               ---------        --------
+
+    // The application state, declared (or re-exported) at the root of the crate
+    use crate::AppState;
+    use serde::{Serialize, Deserialize};
+    use octopux::{
+        HttpCreate,
+        HttpFindListDelete,
+        HttpUpdate,
+        SqlxModel,
+        SqlxNewModel,
+        SqlxUpdatableModel,
+        octopux_info,
+        Model,
+        NewModel,
+        UpdatableModel,
+    };
+    use apistos::ApiComponent;
+    use schemars::JsonSchema;
+    use octopux::gen_documented_endpoint;
+    use async_graphql::{ComplexObject, Context, InputObject, Object, SimpleObject};
+
+    #[derive(Default, Deserialize, JsonSchema, ApiComponent)]
+    pub struct FindQuery {}
+    #[derive(Deserialize, JsonSchema, ApiComponent)]
+    pub struct ListQuery {
+        /// Number of rows to skip
+        pub offset: Option<usize>,
+        /// Maximum number of rows to return (20 by default, 100 at most)
+        pub limit: Option<usize>,
+    }
+    #[derive(Deserialize, JsonSchema, ApiComponent)]
+    pub struct DeleteQuery {}
+    #[derive(Deserialize, JsonSchema, ApiComponent)]
+    pub struct SaveQuery {}
+    #[derive(Deserialize, JsonSchema, ApiComponent)]
+    pub struct UpdateQuery {}
+    pub type Id = i64;
+
+    #[derive(Default, Serialize, Deserialize, JsonSchema, ApiComponent, SimpleObject, sqlx::FromRow, HttpFindListDelete, SqlxModel)]
+    #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
+    #[sqlx_model(database = "postgres")]
+    #[octopux_info(path = "currency")]
+    #[graphql(complex)]
+    pub struct Currency {
+        pub id: Id,
+        pub code: String,
+        pub name: String,
+        pub symbol: String,
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema, ApiComponent, InputObject, HttpCreate, SqlxNewModel)]
+    #[http_create(SaveQuery, AppState)]
+    #[sqlx_model(database = "postgres", model = "Currency")]
+    pub struct NewCurrency {
+        pub code: String,
+        pub name: String,
+        pub symbol: String,
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema, ApiComponent, InputObject, sqlx::FromRow, HttpUpdate, SqlxUpdatableModel)]
+    #[http_update(Id, UpdateQuery, Currency, FindQuery, AppState)]
+    #[sqlx_model(database = "postgres")]
+    pub struct UpdatableCurrency {
+        pub id: Id,
+        pub code: String,
+        pub name: String,
+        pub symbol: String,
+    }
+
+    // Registers the documented routes of the currency endpoint
+    // (octopux `openapi` feature), to mount with `.configure(currency::configure)`
+    pub fn configure(cfg: &mut apistos::web::ServiceConfig) {
+        gen_documented_endpoint!(Currency, NewCurrency, UpdatableCurrency)(cfg)
+    }
+
+
+    // Fields of the GraphQL Currency type resolved by functions, its has-many relations
+    #[ComplexObject]
+    impl Currency {
+        // Relations generated with `octopux generate-relation --graphql`, inserted below
+        /// The salesorders of the currency, paginated
+        async fn salesorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::salesorder::Salesorder>> {
+            crate::currency_salesorders::resolve(ctx, self.id, offset, limit).await
+        }
+        /// The pricelists of the currency, paginated
+        async fn pricelists(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::pricelist::Pricelist>> {
+            crate::currency_pricelists::resolve(ctx, self.id, offset, limit).await
+        }
+        /// The companies of the currency, paginated
+        async fn companies(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::company::Company>> {
+            crate::currency_companies::resolve(ctx, self.id, offset, limit).await
+        }
+    }
+
+    // GraphQL queries of the currency model (async-graphql), to merge into the query root of the schema:
+    // `#[derive(MergedObject, Default)] struct Query(currency::CurrencyQuery, ...);`
+    #[derive(Default)]
+    pub struct CurrencyQuery;
+
+    #[Object]
+    impl CurrencyQuery {
+        async fn currency(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<Currency> {
+            find(id, app_state(ctx)?).await
+        }
+
+        async fn currencies(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<Currency>> {
+            Ok(Currency::list(&ListQuery { offset, limit }, app_state(ctx)?).await?)
+        }
+    }
+
+    // GraphQL mutations of the currency model, to merge into the mutation root of the schema:
+    // `#[derive(MergedObject, Default)] struct Mutation(currency::CurrencyMutation, ...);`
+    #[derive(Default)]
+    pub struct CurrencyMutation;
+
+    #[Object]
+    impl CurrencyMutation {
+        async fn create_currency(&self, ctx: &Context<'_>, input: NewCurrency) -> async_graphql::Result<Currency> {
+            Ok(input.save(&SaveQuery {}, app_state(ctx)?).await?)
+        }
+
+        async fn update_currency(&self, ctx: &Context<'_>, input: UpdatableCurrency) -> async_graphql::Result<Currency> {
+            let state = app_state(ctx)?;
+            let id = input.id;
+            find(id, state).await?;
+            input.update(&UpdateQuery {}, state).await?;
+            find(id, state).await
+        }
+
+        async fn delete_currency(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<Currency> {
+            let state = app_state(ctx)?;
+            let model = find(id, state).await?;
+            Ok(model.delete(&DeleteQuery {}, state).await?)
+        }
+    }
+
+    // Looks the currency up, any error being ENTITY_NOT_FOUND as for the REST routes
+    async fn find(id: Id, state: &AppState) -> async_graphql::Result<Currency> {
+        match Currency::find(id, &FindQuery::default(), state).await {
+            Ok(model) => Ok(*model),
+            Err(_) => Err(async_graphql::Error::new("ENTITY_NOT_FOUND")),
+        }
+    }
+
+    // The state shared with the REST routes, given to the schema with `Schema::build(...).data(state.clone())`
+    fn app_state<'a>(ctx: &Context<'a>) -> async_graphql::Result<&'a AppState> {
+        Ok(ctx.data::<actix_web::web::Data<AppState>>()?.get_ref())
+    }
+
+    
