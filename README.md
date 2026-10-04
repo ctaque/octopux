@@ -405,6 +405,7 @@ Generates `project.rs`, to declare with `mod project;`. Its structs are public, 
 | `--openapi` | Derive `JsonSchema` and `ApiComponent`, and generate the `configure` function mounting the documented routes |
 | `--graphql` | Derive `SimpleObject` and `InputObject`, generate the `ProjectQuery` and `ProjectMutation` roots and merge them into the schema of `src/main.rs`, see [GraphQL](#graphql-with-async-graphql) (requires `--fields`) |
 | `--force` | Overwrite an existing `project.rs` |
+| `--output` | The folder of `project.rs`, created if missing (`--output=src/models`), `src` when it exists by default, the working directory otherwise. The migration stays in the `migrations` folder |
 
 Without `--openapi`, mount the routes with `gen_endpoint!(Project, NewProject, UpdatableProject)` (see [How it works](#how-it-works)).
 
@@ -565,6 +566,7 @@ Generates a [has-many relation](#has-many-relations) in `project_books.rs` for t
 | `--migration` | Create the migration indexing the foreign key (`<timestamp>_index_book_project_id.sql`). Generate it **after** the migration creating the table |
 | `--timestamps` | Skip the soft deleted children, join rows and parents |
 | `--graphql` | Add the relation as a paginated field (`offset`, `limit`) of the GraphQL type of the parent, in the `#[ComplexObject]` of `project.rs`; both models must be generated with `--graphql`, see [GraphQL](#graphql-with-async-graphql) |
+| `--output` | The folder of `project_books.rs`, created if missing; with `--graphql`, `project.rs` is looked up in it |
 | `--openapi`, `--sqlite`, `--postgres`, `--mysql`, `--force` | Same as for [generate-model](#generate-model) |
 
 One-to-many: the books of a project, on `GET /project/{id}/books`:
@@ -624,7 +626,7 @@ Then each single column foreign key referencing the `id` of a model gives a has-
 | `--migrations` | Apply the sqlx migrations of this folder before reading the tables: to a throwaway `--database-url` database, or to an in-memory SQLite database without one |
 | `--tables`, `--exclude` | Only read, or leave out, these tables (comma separated) |
 | `--no-relations` | Only generate the models |
-| `--openapi`, `--graphql`, `--force` | Passed to the `octopux` commands |
+| `--openapi`, `--graphql`, `--force`, `--output` | Passed to the `octopux` commands |
 | `--run` | Run the `octopux` commands in the working directory instead of printing them |
 | `--octopux` | The octopux CLI, `octopux` by default |
 

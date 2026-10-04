@@ -123,6 +123,9 @@ pub enum Opt {
         /// Overwrites the model file when it already exists, the code written in it is lost
         #[structopt(long = "force")]
         force: bool,
+        /// The folder of the model file, created if missing, src when it exists by default, the working directory otherwise
+        #[structopt(long = "output", parse(from_os_str))]
+        output: Option<PathBuf>,
     },
     /// Generates a has-many relation, served on `GET /{parent}/{id}/{relation}` and paginated
     #[structopt(name = "generate-relation")]
@@ -183,6 +186,10 @@ pub enum Opt {
         /// Overwrites the relation file when it already exists, the code written in it is lost
         #[structopt(long = "force")]
         force: bool,
+        /// The folder of the relation file, created if missing, src when it exists by default, the working directory otherwise,
+        /// with --graphql, the parent model is looked up in it
+        #[structopt(long = "output", parse(from_os_str))]
+        output: Option<PathBuf>,
     },
 }
 
@@ -1385,9 +1392,22 @@ fn refuse_overwrite(path: &str, force: bool, what: &str) {
     }
 }
 
-// `file` in the src folder of the working directory when it exists, in the working directory otherwise
-fn source_path(cwd: &Path, file: &str) -> String {
-    if cwd.join("src").is_dir() { format!("src/{}", file) } else { file.to_string() }
+// `file` in the `output` folder when given, else in the src folder of the working directory when it exists,
+// in the working directory otherwise
+fn source_path(cwd: &Path, output: Option<&Path>, file: &str) -> String {
+    match output {
+        Some(dir) => dir.join(file).display().to_string(),
+        None if cwd.join("src").is_dir() => format!("src/{}", file),
+        None => file.to_string(),
+    }
+}
+
+// Writes a generated source file at `path`, creating its folder (the --output one) when missing
+fn write_source(path: &str, content: &str) -> Result<(), Error> {
+    if let Some(dir) = Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()) {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(path, with_header("//", content))
 }
 
 // `<timestamp>_<suffix>.sql` in the migrations folder next to src
@@ -2010,8 +2030,8 @@ const RELATION_TPL: &str = r#"
 
 // Inserts the GraphQL field of the relation in the parent model, or explains how to add it
 // when the parent model is missing or was generated without --graphql
-fn add_relation_field(root: &Path, relation: &Relation) -> Result<(), Error> {
-    let path = source_path(root, &format!("{}.rs", relation.parent_table));
+fn add_relation_field(root: &Path, output: Option<&Path>, relation: &Relation) -> Result<(), Error> {
+    let path = source_path(root, output, &format!("{}.rs", relation.parent_table));
     let source = fs::read_to_string(root.join(&path)).ok();
     match source.as_deref().and_then(|source| with_relation_field(source, relation).map(|patched| (source, patched))) {
         Some((source, patched)) if patched == source => {
@@ -2067,7 +2087,7 @@ fn with_graphql_roots(source: &str, module: &str, entity: &str) -> Option<String
 // Merges the query and mutation roots of the model into the schema of src/main.rs,
 // printing them to merge by hand when src/main.rs was not bootstrapped with --graphql
 fn add_graphql_roots(root: &Path, module: &str, entity: &str) -> Result<(), Error> {
-    let path = source_path(root, "main.rs");
+    let path = source_path(root, None, "main.rs");
     let source = fs::read_to_string(root.join(&path)).ok();
     match source.as_deref().and_then(|source| with_graphql_roots(source, module, entity).map(|patched| (source, patched))) {
         Some((source, patched)) if patched == source => {
@@ -2202,7 +2222,7 @@ fn main() -> Result<(), Error> {
 
 fn run(opt: Opt) -> Result<(), Error> {
     match opt {
-        Opt::GenerateModel { name, openapi, graphql, fields, sqlx, migration, foreign_keys, unique, table, sqlite: _, postgres, mysql, timestamps, force } => {
+        Opt::GenerateModel { name, openapi, graphql, fields, sqlx, migration, foreign_keys, unique, table, sqlite: _, postgres, mysql, timestamps, force, output } => {
             let dialect = Dialect::from_flags(postgres, mysql);
             if let Some(invalid) = table.as_ref().filter(|t| !is_field_name(t)) {
                 eprintln!("{}", failure(&format!("`{}` is not a valid table name, use snake_case, model {} not generated", invalid, name)));
@@ -2211,7 +2231,7 @@ fn run(opt: Opt) -> Result<(), Error> {
             let table = table.unwrap_or_else(|| to_snake_case(&name));
             // the file and the module are named after the table
             let module = table.clone();
-            let path = source_path(&std::env::current_dir()?, &format!("{}.rs", module));
+            let path = source_path(&std::env::current_dir()?, output.as_deref(), &format!("{}.rs", module));
             let overwrites = Path::new(&path).exists();
             refuse_overwrite(&path, force, &format!("model {}", name));
             let fields_asked = fields;
@@ -2254,7 +2274,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                     process::exit(1);
                 }
             }
-            fs::write(&path, with_header("//", &render_table_model(&name, Some(&table), openapi, graphql, sqlx, timestamps, &fields, dialect)))?;
+            write_source(&path, &render_table_model(&name, Some(&table), openapi, graphql, sqlx, timestamps, &fields, dialect))?;
             println!("{}", success(&format!("Successfully generated model {}, declare it with `mod {};`", path, module)));
             if graphql {
                 add_graphql_roots(&std::env::current_dir()?, &module, &name)?;
@@ -2270,7 +2290,7 @@ fn run(opt: Opt) -> Result<(), Error> {
             }
             Ok(())
         }
-        Opt::GenerateRelation { parent, child, name, foreign_key, through, child_key, parent_table, child_table, through_table, openapi, graphql, sqlx, migration, sqlite: _, postgres, mysql, timestamps, force } => {
+        Opt::GenerateRelation { parent, child, name, foreign_key, through, child_key, parent_table, child_table, through_table, openapi, graphql, sqlx, migration, sqlite: _, postgres, mysql, timestamps, force, output } => {
             let dialect = Dialect::from_flags(postgres, mysql);
             let relation = Relation::new(parent, child, name, foreign_key, through, child_key).with_tables(parent_table, child_table, through_table);
             let columns = [
@@ -2286,9 +2306,9 @@ fn run(opt: Opt) -> Result<(), Error> {
                 process::exit(1);
             }
             let module = relation.module();
-            let path = source_path(&std::env::current_dir()?, &format!("{}.rs", module));
+            let path = source_path(&std::env::current_dir()?, output.as_deref(), &format!("{}.rs", module));
             refuse_overwrite(&path, force, "relation");
-            fs::write(&path, with_header("//", &render_relation(&relation, openapi, graphql, sqlx, timestamps, dialect)))?;
+            write_source(&path, &render_relation(&relation, openapi, graphql, sqlx, timestamps, dialect))?;
             println!(
                 "{}",
                 success(&format!(
@@ -2297,7 +2317,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                 ))
             );
             if graphql {
-                add_relation_field(&std::env::current_dir()?, &relation)?;
+                add_relation_field(&std::env::current_dir()?, output.as_deref(), &relation)?;
             }
             if migration {
                 let (table, column) = relation.foreign_key_column();
@@ -2834,10 +2854,13 @@ CREATE INDEX book_idx ON book (code);
     fn sources_go_in_the_src_folder_when_it_exists() {
         let root = std::env::temp_dir().join(format!("octopux-source-path-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        assert_eq!(source_path(&root, "project.rs"), "project.rs");
+        assert_eq!(source_path(&root, None, "project.rs"), "project.rs");
         std::fs::create_dir_all(root.join("src")).unwrap();
-        assert_eq!(source_path(&root, "project.rs"), "src/project.rs");
-        assert_eq!(source_path(&root.join("src"), "project.rs"), "project.rs");
+        assert_eq!(source_path(&root, None, "project.rs"), "src/project.rs");
+        assert_eq!(source_path(&root.join("src"), None, "project.rs"), "project.rs");
+        // --output wins over the src folder
+        assert_eq!(source_path(&root, Some(std::path::Path::new("src/models")), "project.rs"), "src/models/project.rs");
+        assert_eq!(source_path(&root, Some(std::path::Path::new("/tmp/out")), "project.rs"), "/tmp/out/project.rs");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -3137,6 +3160,10 @@ CREATE INDEX book_idx ON book (code);
     fn force_is_accepted_by_the_generators() {
         assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--force"]).is_ok());
         assert!(Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "Project", "--child", "Book", "--force"]).is_ok());
+        let opt = Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--output=src/models"]).unwrap();
+        assert!(matches!(opt, Opt::GenerateModel { output: Some(ref o), .. } if o == std::path::Path::new("src/models")));
+        let opt = Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "Project", "--child", "Book", "--output", "/tmp/out"]).unwrap();
+        assert!(matches!(opt, Opt::GenerateRelation { output: Some(ref o), .. } if o == std::path::Path::new("/tmp/out")));
     }
 
     #[test]
@@ -3247,20 +3274,20 @@ CREATE INDEX book_idx ON book (code);
         let parent = super::with_header("//", &render_model("Author", false, true, true, false, &[field("name", "String")], Dialect::Sqlite));
         std::fs::write(root.join("src/author.rs"), &parent).unwrap();
         let rel = relation("Author", "Book", None);
-        super::add_relation_field(&root, &rel).unwrap();
+        super::add_relation_field(&root, None, &rel).unwrap();
         let patched = std::fs::read_to_string(root.join("src/author.rs")).unwrap();
         assert_eq!(patched, super::with_relation_field(&parent, &rel).unwrap());
-        super::add_relation_field(&root, &rel).unwrap();
+        super::add_relation_field(&root, None, &rel).unwrap();
         assert_eq!(std::fs::read_to_string(root.join("src/author.rs")).unwrap(), patched);
 
         // a parent generated without --graphql is left as it is, the field being printed to add by hand
         let plain = super::with_header("//", &render_model("Author", false, false, true, false, &[field("name", "String")], Dialect::Sqlite));
         std::fs::write(root.join("src/author.rs"), &plain).unwrap();
-        super::add_relation_field(&root, &rel).unwrap();
+        super::add_relation_field(&root, None, &rel).unwrap();
         assert_eq!(std::fs::read_to_string(root.join("src/author.rs")).unwrap(), plain);
         // as is a missing parent
         std::fs::remove_file(root.join("src/author.rs")).unwrap();
-        super::add_relation_field(&root, &rel).unwrap();
+        super::add_relation_field(&root, None, &rel).unwrap();
         assert!(!root.join("src/author.rs").exists());
         std::fs::remove_dir_all(&root).unwrap();
     }

@@ -52,6 +52,9 @@ struct Cli {
     /// Passes --force to the octopux commands, overwriting the existing models and relations
     #[structopt(long = "force")]
     force: bool,
+    /// Passes --output to the octopux commands, the folder of the generated models and relations
+    #[structopt(long = "output")]
+    output: Option<String>,
     /// Runs the octopux commands in the working directory instead of printing them
     #[structopt(long = "run")]
     run: bool,
@@ -114,8 +117,8 @@ fn reverse(cli: &Cli) -> Result<(), String> {
         plan.relations.clear();
     }
     report(&plan, dialect);
-    let options = Options { openapi: cli.openapi, graphql: cli.graphql, force: cli.force };
-    let commands = plan::commands(&plan, dialect, options);
+    let options = Options { openapi: cli.openapi, graphql: cli.graphql, force: cli.force, output: cli.output.clone() };
+    let commands = plan::commands(&plan, dialect, &options);
     if cli.run {
         commands.iter().try_for_each(|command| run(&cli.octopux, command))?;
         eprintln!("{}", plan::mounting(&plan));
