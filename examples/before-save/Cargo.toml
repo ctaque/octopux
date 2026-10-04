@@ -1,0 +1,20 @@
+[package]
+name = "before_save"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[package.metadata.release]
+release = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+octopux = { workspace = true, features = ["openapi", "sqlx"] }
+actix-web.workspace = true
+anyhow.workspace = true
+apistos = { workspace = true, features = ["chrono", "swagger-ui"] }
+chrono.workspace = true
+schemars.workspace = true
+serde.workspace = true
+sqlx.workspace = true
