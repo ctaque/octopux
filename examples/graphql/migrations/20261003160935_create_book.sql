@@ -31,7 +31,7 @@
 --               ---------        --------
 
 CREATE TABLE IF NOT EXISTS book (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     title TEXT NOT NULL,
-    author_id INTEGER NOT NULL
+    author_id BIGINT NOT NULL
 );

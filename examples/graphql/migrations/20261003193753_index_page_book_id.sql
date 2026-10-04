@@ -30,13 +30,4 @@
 --              -----------     -----------
 --               ---------        --------
 
-CREATE TABLE IF NOT EXISTS page (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    page_number INTEGER NOT NULL,
-    book_id INTEGER NOT NULL,
-    contents TEXT NOT NULL,
-    created_at DATETIME,
-    updated_at DATETIME,
-    deleted_at DATETIME,
-    FOREIGN KEY (book_id) REFERENCES book (id)
-);
+CREATE INDEX IF NOT EXISTS page_book_id_idx ON page (book_id);

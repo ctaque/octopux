@@ -68,7 +68,7 @@
 
     #[derive(Default, Serialize, Deserialize, SimpleObject, sqlx::FromRow, HttpFindListDelete, SqlxModel)]
     #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
-    #[sqlx_model(database = "sqlite", timestamps, soft_delete)]
+    #[sqlx_model(database = "postgres", timestamps, soft_delete)]
     #[octopux_info(path = "page")]
     #[graphql(complex)]
     pub struct Page {
@@ -83,7 +83,7 @@
 
     #[derive(Serialize, Deserialize, InputObject, HttpCreate, SqlxNewModel)]
     #[http_create(SaveQuery, AppState)]
-    #[sqlx_model(database = "sqlite", model = "Page", timestamps)]
+    #[sqlx_model(database = "postgres", model = "Page", timestamps)]
     pub struct NewPage {
         pub page_number: i32,
         pub book_id: i64,
@@ -92,7 +92,7 @@
 
     #[derive(Serialize, Deserialize, InputObject, sqlx::FromRow, HttpUpdate, SqlxUpdatableModel)]
     #[http_update(Id, UpdateQuery, Page, FindQuery, AppState)]
-    #[sqlx_model(database = "sqlite", timestamps, soft_delete)]
+    #[sqlx_model(database = "postgres", timestamps, soft_delete)]
     pub struct UpdatablePage {
         pub id: Id,
         pub page_number: i32,

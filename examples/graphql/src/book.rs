@@ -67,7 +67,7 @@
 
     #[derive(Default, Serialize, Deserialize, SimpleObject, sqlx::FromRow, HttpFindListDelete, SqlxModel)]
     #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
-    #[sqlx_model(database = "sqlite")]
+    #[sqlx_model(database = "postgres")]
     #[octopux_info(path = "book")]
     #[graphql(complex)]
     pub struct Book {
@@ -78,7 +78,7 @@
 
     #[derive(Serialize, Deserialize, InputObject, HttpCreate, SqlxNewModel)]
     #[http_create(SaveQuery, AppState)]
-    #[sqlx_model(database = "sqlite", model = "Book")]
+    #[sqlx_model(database = "postgres", model = "Book")]
     pub struct NewBook {
         pub title: String,
         pub author_id: i64,
@@ -86,7 +86,7 @@
 
     #[derive(Serialize, Deserialize, InputObject, sqlx::FromRow, HttpUpdate, SqlxUpdatableModel)]
     #[http_update(Id, UpdateQuery, Book, FindQuery, AppState)]
-    #[sqlx_model(database = "sqlite")]
+    #[sqlx_model(database = "postgres")]
     pub struct UpdatableBook {
         pub id: Id,
         pub title: String,
@@ -103,6 +103,10 @@
     #[ComplexObject]
     impl Book {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
+        /// The book_pages of the book, paginated
+        async fn pages(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::page::Page>> {
+            crate::book_book_pages::resolve(ctx, self.id, offset, limit).await
+        }
     }
 
     // GraphQL queries of the book model (async-graphql), to merge into the query root of the schema:

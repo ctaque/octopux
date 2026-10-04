@@ -31,6 +31,6 @@
 --               ---------        --------
 
 CREATE TABLE IF NOT EXISTS author (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL
 );
