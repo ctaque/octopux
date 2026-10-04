@@ -13,7 +13,8 @@ categories = ["command-line-utilities", "development-tools"]
 [dependencies]
 structopt.workspace = true
 # Reads the schema of DATABASE_URL, and applies --migrations to it first
-sqlx = { workspace = true, features = ["mysql"] }
+# mysql-rsa: MySQL 8 authenticates with RSA (caching_sha2_password) without TLS
+sqlx = { workspace = true, features = ["mysql", "mysql-rsa"] }
 tokio = { version = "1", features = ["rt", "net", "time"] }
 
 [[bin]]

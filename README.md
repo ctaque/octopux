@@ -592,6 +592,9 @@ sh reverse.sh
 
 # or run them directly
 octopux-reverse --database-url postgres://localhost/my_db --openapi --run
+
+# a MySQL (or MariaDB) database, the models are generated with --mysql
+octopux-reverse --mysql --database-url mysql://user:password@localhost/my_db --run
 ```
 
 Each table becomes a model named after its singular (`books` gives `Book`, generated with `--table books`), with a field per column (nullable columns are `Option<T>`), and is generated with `--sqlx` for the database of the url:
@@ -610,12 +613,14 @@ EOF
 - `created_at`, `updated_at` and `deleted_at` timestamp columns (`TIMESTAMPTZ` with PostgreSQL) give `--timestamps`.
 - The columns whose type has no field type (`geometry`, custom enums...) or whose name is not snake_case are left out, with a warning. `uuid`, `numeric` and `json` columns give `uuid::Uuid`, `rust_decimal::Decimal` and `serde_json::Value` fields, which need the matching sqlx features.
 - A column named after a keyword gives a raw identifier field (`r#type`).
+- With MySQL, `TINYINT(1)`, `BOOLEAN` and `BIT(1)` columns give `bool` fields, the other `BIT` columns `u64` and `YEAR` `u16`, unsigned integers their unsigned type. An `id` of `BIGINT UNSIGNED` gives no model: sqlx does not decode it into the `i64` of the octopux models.
 
 Then each single column foreign key referencing the `id` of a model gives a has-many relation of the referenced model (`GET /author/{id}/books`). A join table, holding only two such foreign keys (besides an `id` and the timestamps), also gives the many-to-many relations of its two models, in both directions. Two relations of a parent to the same child are told apart by their foreign key (`books_by_editor`). The script ends with the `mod` declarations and the `.configure` calls to add to `src/main.rs`.
 
 | Option | Description |
 | --- | --- |
 | `--database-url` | The database to read, `DATABASE_URL` by default |
+| `--sqlite`, `--postgres`, `--mysql` | Check that the url is one of this database (`mysql:` or `mariadb:` for `--mysql`). With `--migrations`, `--postgres` and `--mysql` need a `--database-url`: their migrations are not applied to the in-memory SQLite database |
 | `--migrations` | Apply the sqlx migrations of this folder before reading the tables: to a throwaway `--database-url` database, or to an in-memory SQLite database without one |
 | `--tables`, `--exclude` | Only read, or leave out, these tables (comma separated) |
 | `--no-relations` | Only generate the models |

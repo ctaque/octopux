@@ -21,6 +21,14 @@ impl Dialect {
         }
     }
 
+    pub fn name(self) -> &'static str {
+        match self {
+            Dialect::Sqlite => "SQLite",
+            Dialect::Postgres => "PostgreSQL",
+            Dialect::Mysql => "MySQL",
+        }
+    }
+
     // The flag of the octopux CLI targeting the database
     pub fn flag(self) -> &'static str {
         match self {
@@ -89,9 +97,14 @@ JOIN pg_attribute ra ON ra.attrelid = c.confrelid AND ra.attnum = c.confkey[1]
 WHERE c.contype = 'f' AND n.nspname = current_schema() AND rn.nspname = current_schema() AND array_length(c.conkey, 1) = 1
 ORDER BY 1, 2";
 
-// information_schema columns are cast, MySQL 8 returns some of them as binary strings
+// information_schema columns are cast, MySQL 8 returns some of them as binary strings.
+// The primary key is the `PRIMARY` constraint: COLUMN_KEY is also `PRI` for the first unique NOT NULL index
+// of a table without primary key
 const MYSQL_COLUMNS: &str = "SELECT CAST(c.TABLE_NAME AS CHAR), CAST(c.COLUMN_NAME AS CHAR), CAST(c.COLUMN_TYPE AS CHAR),
-    CAST(c.IS_NULLABLE = 'YES' AS SIGNED), CAST(c.COLUMN_KEY = 'PRI' AS SIGNED)
+    CAST(c.IS_NULLABLE = 'YES' AS SIGNED),
+    CAST(EXISTS (SELECT 1 FROM information_schema.KEY_COLUMN_USAGE k
+        WHERE k.TABLE_SCHEMA = c.TABLE_SCHEMA AND k.TABLE_NAME = c.TABLE_NAME AND k.COLUMN_NAME = c.COLUMN_NAME
+        AND k.CONSTRAINT_NAME = 'PRIMARY') AS SIGNED)
 FROM information_schema.COLUMNS c
 JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
 WHERE c.TABLE_SCHEMA = DATABASE() AND t.TABLE_TYPE = 'BASE TABLE' AND c.TABLE_NAME <> '_sqlx_migrations'
@@ -291,5 +304,41 @@ mod tests {
         assert_eq!(book.column("author_id").map(|c| c.nullable), Some(true));
         // the key of two columns is left out, the implicit referenced column is the primary key
         assert_eq!(book.foreign_keys, [ForeignKey { column: "author_id".into(), table: "author".into(), references: "id".into() }]);
+    }
+
+    // Against a throwaway MySQL database: OCTOPUX_REVERSE_MYSQL_URL=mysql://root:root@127.0.0.1/test cargo test
+    #[test]
+    fn mysql_tables_have_their_primary_keys_and_decode_into_their_field_types() {
+        let Ok(url) = std::env::var("OCTOPUX_REVERSE_MYSQL_URL") else { return };
+        let (tables, row) = block_on(async {
+            let mut db = Database::connect(Some(&url), true).await.unwrap();
+            let Database::Mysql(conn) = &mut db else { panic!("not a mysql: url") };
+            sqlx::raw_sql(
+                "DROP TABLE IF EXISTS reverse_book, reverse_setting;
+                CREATE TABLE reverse_setting (id BIGINT NOT NULL UNIQUE, value TEXT);
+                CREATE TABLE reverse_book (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY, published BIT(1) NOT NULL, flags BIT(8) NOT NULL,
+                    year YEAR NOT NULL, active BOOLEAN NOT NULL
+                );
+                INSERT INTO reverse_book (published, flags, year, active) VALUES (1, 5, 2024, TRUE);",
+            )
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+            let row: (bool, u64, u16, bool) =
+                sqlx::query_as("SELECT published, flags, year, active FROM reverse_book").fetch_one(&mut *conn).await.unwrap();
+            let tables = db.tables().await.unwrap();
+            let Database::Mysql(conn) = &mut db else { unreachable!() };
+            sqlx::raw_sql("DROP TABLE reverse_book, reverse_setting").execute(&mut *conn).await.unwrap();
+            (tables, row)
+        });
+        assert_eq!(row, (true, 5, 2024, true));
+        let setting = tables.iter().find(|t| t.name == "reverse_setting").unwrap();
+        // a unique NOT NULL column is not the primary key
+        assert_eq!(setting.column("id").map(|c| c.primary_key), Some(false));
+        let book = tables.iter().find(|t| t.name == "reverse_book").unwrap();
+        let types: Vec<_> = book.columns.iter().map(|c| crate::plan::rust_type(Dialect::Mysql, &c.sql_type).unwrap()).collect();
+        assert_eq!(types, ["i64", "bool", "u64", "u16", "bool"]);
+        assert!(book.column("id").unwrap().primary_key);
     }
 }

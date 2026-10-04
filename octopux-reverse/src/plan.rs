@@ -72,6 +72,10 @@ fn mysql_type(column_type: &str) -> Option<&'static str> {
     Some(match (base, unsigned) {
         _ if ty.starts_with("tinyint(1)") && !unsigned => "bool",
         ("bool" | "boolean", _) => "bool",
+        // sqlx decodes a BIT(1) as a bool, and the other BIT and YEAR columns as unsigned integers
+        _ if ty.starts_with("bit(1)") => "bool",
+        ("bit", _) => "u64",
+        ("year", _) => "u16",
         ("tinyint", false) => "i8",
         ("tinyint", true) => "u8",
         ("smallint", false) => "i16",
@@ -219,7 +223,7 @@ fn model(table: &Table, dialect: Dialect, warnings: &mut Vec<String>) -> Result<
     let primary_key: Vec<&str> = table.columns.iter().filter(|c| c.primary_key).map(|c| c.name.as_str()).collect();
     match (primary_key.as_slice(), table.column("id")) {
         (["id"], Some(id)) if is_id_type(dialect, &id.sql_type) => {}
-        (["id"], Some(id)) => return Err(format!("its `id` is a {}, the octopux models need a 64 bit integer", id.sql_type)),
+        (["id"], Some(id)) => return Err(format!("its `id` is a {}, the octopux models need a signed 64 bit integer", id.sql_type)),
         _ => return Err("its primary key is not an `id` column".to_string()),
     }
     let timestamps = TIMESTAMP_COLUMNS
@@ -473,6 +477,12 @@ mod tests {
         assert_eq!(rust_type(Dialect::Mysql, "int unsigned").as_deref(), Some("u32"));
         assert_eq!(rust_type(Dialect::Mysql, "varchar(255)").as_deref(), Some("String"));
         assert_eq!(rust_type(Dialect::Mysql, "datetime(6)").as_deref(), Some("DateTime<Utc>"));
+        assert_eq!(rust_type(Dialect::Mysql, "bit(1)").as_deref(), Some("bool"));
+        assert_eq!(rust_type(Dialect::Mysql, "bit(8)").as_deref(), Some("u64"));
+        assert_eq!(rust_type(Dialect::Mysql, "year").as_deref(), Some("u16"));
+        // the octopux models need an i64 `id`, sqlx refuses to decode an unsigned one
+        assert!(!is_id_type(Dialect::Mysql, "bigint unsigned"));
+        assert!(is_id_type(Dialect::Mysql, "bigint(20)"));
     }
 
     #[test]
@@ -509,7 +519,7 @@ mod tests {
         assert_eq!(
             plan.warnings,
             [
-                "tag: no model, its `id` is a int4, the octopux models need a 64 bit integer",
+                "tag: no model, its `id` is a int4, the octopux models need a signed 64 bit integer",
                 "settings: no model, its primary key is not an `id` column",
                 "empty: no model, it has no column besides `id` and the timestamps",
             ]

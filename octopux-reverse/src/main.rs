@@ -24,6 +24,16 @@ struct Cli {
     /// without --database-url. The migrations are applied to the --database-url database: use a throwaway one
     #[structopt(long = "migrations", parse(from_os_str))]
     migrations: Option<PathBuf>,
+    /// Reads a SQLite database, `--database-url` is a `sqlite:` one
+    #[structopt(long = "sqlite", conflicts_with_all = &["postgres", "mysql"])]
+    sqlite: bool,
+    /// Reads a PostgreSQL database, `--database-url` is a `postgres:` one
+    #[structopt(long = "postgres", conflicts_with = "mysql")]
+    postgres: bool,
+    /// Reads a MySQL (or MariaDB) database, `--database-url` is a `mysql:` one.
+    /// --migrations are then applied to it, there is no in-memory MySQL database
+    #[structopt(long = "mysql")]
+    mysql: bool,
     /// Only reads these tables, comma separated
     #[structopt(long = "tables", use_delimiter = true)]
     tables: Vec<String>,
@@ -58,7 +68,31 @@ fn main() {
     }
 }
 
+// The url must be one of the database of the --sqlite, --postgres or --mysql flag
+fn check_dialect(cli: &Cli) -> Result<(), String> {
+    let expected = match (cli.sqlite, cli.postgres, cli.mysql) {
+        (true, _, _) => Dialect::Sqlite,
+        (_, true, _) => Dialect::Postgres,
+        (_, _, true) => Dialect::Mysql,
+        _ => return Ok(()),
+    };
+    match cli.database_url.as_deref() {
+        Some(url) if Dialect::from_url(url) != Some(expected) => {
+            let scheme = url.split(':').next().unwrap_or_default();
+            Err(format!("{} reads a {} database, the url is a `{}:` one", expected.flag(), expected.name(), scheme))
+        }
+        // the migrations of a server database are not applied to the in-memory SQLite one
+        None if expected != Dialect::Sqlite => Err(format!(
+            "{} needs DATABASE_URL or --database-url{}",
+            expected.flag(),
+            if cli.migrations.is_some() { ", a throwaway database to apply the migrations to" } else { "" }
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn reverse(cli: &Cli) -> Result<(), String> {
+    check_dialect(cli)?;
     if cli.database_url.is_none() && cli.migrations.is_none() {
         return Err("set DATABASE_URL or --database-url, or --migrations to read the tables they create".to_string());
     }
@@ -107,12 +141,12 @@ fn report(plan: &Plan, dialect: Dialect) {
         eprintln!("note: the models use the `{}` sqlx features, and their crates", crates.join("`, `"));
     }
     eprintln!(
-        "{} model{} and {} relation{} read from the {:?} database",
+        "{} model{} and {} relation{} read from the {} database",
         plan.models.len(),
         if plan.models.len() != 1 { "s" } else { "" },
         plan.relations.len(),
         if plan.relations.len() != 1 { "s" } else { "" },
-        dialect,
+        dialect.name(),
     );
 }
 
@@ -137,5 +171,31 @@ fn run(octopux: &str, command: &Command) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("`{} {}` failed ({})", octopux, command.args.join(" "), status))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check(args: &str) -> Result<(), String> {
+        check_dialect(&Cli::from_iter_safe(args.split(' ')).unwrap())
+    }
+
+    #[test]
+    fn the_url_is_one_of_the_database_flag() {
+        assert_eq!(check("octopux-reverse --mysql --database-url mysql://localhost/db"), Ok(()));
+        assert_eq!(check("octopux-reverse --mysql --database-url mariadb://localhost/db"), Ok(()));
+        assert_eq!(check("octopux-reverse --database-url postgres://localhost/db"), Ok(()));
+        assert_eq!(check("octopux-reverse --sqlite --migrations migrations"), Ok(()));
+        assert_eq!(
+            check("octopux-reverse --mysql --database-url postgres://localhost/db"),
+            Err("--mysql reads a MySQL database, the url is a `postgres:` one".to_string())
+        );
+        assert_eq!(
+            check("octopux-reverse --mysql --migrations migrations"),
+            Err("--mysql needs DATABASE_URL or --database-url, a throwaway database to apply the migrations to".to_string())
+        );
+        assert!(Cli::from_iter_safe(["octopux-reverse", "--mysql", "--postgres"]).is_err());
     }
 }
