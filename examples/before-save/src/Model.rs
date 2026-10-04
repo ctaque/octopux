@@ -35,10 +35,10 @@
     #[derive(Default, Serialize, Deserialize, JsonSchema, ApiComponent, sqlx::FromRow, HttpFindListDelete, SqlxModel)]
     #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
     #[sqlx_model(database = "postgres", timestamps, soft_delete)]
-    #[octopux_info(path = "model2")]
-    struct Model2 {
+    #[octopux_info(path = "model")]
+    pub struct Model {
         id: Id,
-        field1: String,
+        password: String,
         created_at: Option<DateTime<Utc>>,
         updated_at: Option<DateTime<Utc>>,
         deleted_at: Option<DateTime<Utc>>,
@@ -46,24 +46,23 @@
 
     #[derive(Serialize, Deserialize, JsonSchema, ApiComponent, HttpCreate, SqlxNewModel)]
     #[http_create(SaveQuery, AppState)]
-    #[sqlx_model(database = "postgres", model = "Model2", timestamps)]
-    struct NewModel2 {
-        field1: String,
+    #[sqlx_model(database = "postgres", model = "Model", timestamps, before_save)]
+    pub struct NewModel {
+        pub password: String,
     }
 
     #[derive(Serialize, Deserialize, JsonSchema, ApiComponent, sqlx::FromRow, HttpUpdate, SqlxUpdatableModel)]
-    #[http_update(Id, UpdateQuery, Model2, FindQuery, AppState)]
-    #[sqlx_model(database = "postgres", timestamps, soft_delete)]
-    struct UpdatableModel2 {
+    #[http_update(Id, UpdateQuery, Model, FindQuery, AppState)]
+    #[sqlx_model(database = "postgres", timestamps, soft_delete, before_save)]
+    pub struct UpdatableModel {
         id: Id,
-        field1: String,
         updated_at: Option<DateTime<Utc>>,
     }
 
-    // Registers the documented routes of the model2 endpoint
+    // Registers the documented routes of the model endpoint
     // (octopux `openapi` feature), to mount with `.configure(model2::configure)`
     pub fn configure(cfg: &mut apistos::web::ServiceConfig) {
-        gen_documented_endpoint!(Model2, NewModel2, UpdatableModel2)(cfg)
+        gen_documented_endpoint!(Model, NewModel, UpdatableModel)(cfg)
     }
 
     
