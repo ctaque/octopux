@@ -104,6 +104,9 @@ pub enum Opt {
         /// requires --migration
         #[structopt(long = "unique", requires = "migration")]
         unique: bool,
+        /// The table of the sqlx queries and the migration, the snake_case model name by default (`book_page` for `BookPage`)
+        #[structopt(long = "table", hidden = true)]
+        table: Option<String>,
         /// Targets SQLite with the sqlx queries and the migration (the default)
         #[structopt(long = "sqlite", conflicts_with_all = &["postgres", "mysql"])]
         sqlite: bool,
@@ -143,6 +146,15 @@ pub enum Opt {
         /// The column of the --through table referencing the child, `{child}_id` by default (`category_id`)
         #[structopt(long = "child-key", requires = "through")]
         child_key: Option<String>,
+        /// The table of the parent model, the snake_case parent by default (`project`)
+        #[structopt(long = "parent-table", hidden = true)]
+        parent_table: Option<String>,
+        /// The table of the child model, the snake_case child by default (`book`)
+        #[structopt(long = "child-table", hidden = true)]
+        child_table: Option<String>,
+        /// The join table, the snake_case --through model by default (`project_category`)
+        #[structopt(long = "through-table", requires = "through", hidden = true)]
+        through_table: Option<String>,
         /// Derives JsonSchema and ApiComponent on the query, and documents the route
         #[structopt(long = "openapi")]
         openapi: bool,
@@ -376,7 +388,7 @@ const GRAPHQL_RESOLVERS: &str = r#"
 
     #[Object]
     impl {entity}Query {
-        async fn {module}(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<{entity}> {
+        async fn {field}(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<{entity}> {
             find(id, app_state(ctx)?).await
         }
 
@@ -392,11 +404,11 @@ const GRAPHQL_RESOLVERS: &str = r#"
 
     #[Object]
     impl {entity}Mutation {
-        async fn create_{module}(&self, ctx: &Context<'_>, input: New{entity}) -> async_graphql::Result<{entity}> {
+        async fn create_{field}(&self, ctx: &Context<'_>, input: New{entity}) -> async_graphql::Result<{entity}> {
             Ok(input.save(&SaveQuery {}, app_state(ctx)?).await?)
         }
 
-        async fn update_{module}(&self, ctx: &Context<'_>, input: Updatable{entity}) -> async_graphql::Result<{entity}> {
+        async fn update_{field}(&self, ctx: &Context<'_>, input: Updatable{entity}) -> async_graphql::Result<{entity}> {
             let state = app_state(ctx)?;
             let id = input.id;
             find(id, state).await?;
@@ -404,7 +416,7 @@ const GRAPHQL_RESOLVERS: &str = r#"
             find(id, state).await
         }
 
-        async fn delete_{module}(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<{entity}> {
+        async fn delete_{field}(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<{entity}> {
             let state = app_state(ctx)?;
             let model = find(id, state).await?;
             Ok(model.delete(&DeleteQuery {}, state).await?)
@@ -499,7 +511,10 @@ fn parse_field_type(answer: &str) -> Option<String> {
 fn is_field_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
-        Some(c) if c.is_ascii_lowercase() || c == '_' => chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+        Some(c) if c.is_ascii_lowercase() || c == '_' => {
+            // keywords that cannot be raw identifiers, the other ones are written `r#type`
+            chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') && !["_", "self", "super", "crate"].contains(&name)
+        }
         _ => false,
     }
 }
@@ -1466,15 +1481,29 @@ fn chrono_imports(fields: &[Field], timestamps: bool) -> String {
     }
 }
 
+// Keywords a field can be named after as a raw identifier (`r#type`), its column keeps the plain name
+const RAW_KEYWORDS: &[&str] = &[
+    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do", "dyn", "else", "enum", "extern", "false",
+    "final", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub",
+    "ref", "return", "static", "struct", "trait", "true", "try", "type", "typeof", "unsafe", "unsized", "use", "virtual", "where",
+    "while", "yield",
+];
+
+// The identifier of a field: `type` gives `r#type`
+fn field_ident(name: &str) -> String {
+    if RAW_KEYWORDS.contains(&name) { format!("r#{}", name) } else { name.to_string() }
+}
+
 fn struct_fields(fields: &[Field]) -> String {
     fields
         .iter()
-        .map(|f| format!("\n        pub {}: {},", f.name, f.ty))
+        .map(|f| format!("\n        pub {}: {},", field_ident(&f.name), f.ty))
         .collect()
 }
 
-// `#[sqlx_model(...)]` of the model structs, `model` names the model returned by `save`
-fn sqlx_model_attribute(dialect: Dialect, model: Option<&str>, timestamps: bool, soft_delete: bool) -> String {
+// `#[sqlx_model(...)]` of the model structs, `model` names the model returned by `save`,
+// `table` the table queried when it is not the lowercase model name
+fn sqlx_model_attribute(dialect: Dialect, model: Option<&str>, table: Option<&str>, timestamps: bool, soft_delete: bool) -> String {
     let database = match dialect {
         Dialect::Sqlite => "sqlite",
         Dialect::Postgres => "postgres",
@@ -1483,6 +1512,9 @@ fn sqlx_model_attribute(dialect: Dialect, model: Option<&str>, timestamps: bool,
     let mut args = vec![format!("database = \"{}\"", database)];
     if let Some(model) = model {
         args.push(format!("model = \"{}\"", model));
+    }
+    if let Some(table) = table {
+        args.push(format!("table = \"{}\"", table));
     }
     if timestamps {
         args.push("timestamps".to_string());
@@ -1493,7 +1525,19 @@ fn sqlx_model_attribute(dialect: Dialect, model: Option<&str>, timestamps: bool,
     format!("\n    #[sqlx_model({})]", args.join(", "))
 }
 
+// The model of `name`, on its lowercase table
+#[cfg(test)]
 fn render_model(name: &str, openapi: bool, graphql: bool, sqlx: bool, timestamps: bool, fields: &[Field], dialect: Dialect) -> String {
+    render_table_model(name, None, openapi, graphql, sqlx, timestamps, fields, dialect)
+}
+
+// The model of `name`, its sqlx queries on `table` when set, on the lowercase name otherwise
+#[allow(clippy::too_many_arguments)]
+fn render_table_model(name: &str, table: Option<&str>, openapi: bool, graphql: bool, sqlx: bool, timestamps: bool, fields: &[Field], dialect: Dialect) -> String {
+    // the module of the model is named after its table
+    let module = table.map_or_else(|| to_snake_case(name), String::from);
+    // the derives default to the lowercase model name
+    let table = table.filter(|t| *t != name.to_lowercase());
     let (imports, derives, configure) = if openapi {
         (OPENAPI_IMPORTS, OPENAPI_DERIVES, OPENAPI_CONFIGURE)
     } else {
@@ -1525,9 +1569,9 @@ fn render_model(name: &str, openapi: bool, graphql: bool, sqlx: bool, timestamps
             .replace("{model_derives}", ", sqlx::FromRow, HttpFindListDelete, SqlxModel")
             .replace("{new_derives}", ", HttpCreate, SqlxNewModel")
             .replace("{updatable_derives}", ", sqlx::FromRow, HttpUpdate, SqlxUpdatableModel")
-            .replace("{model_sqlx}", &sqlx_model_attribute(dialect, None, timestamps, timestamps))
-            .replace("{new_sqlx}", &sqlx_model_attribute(dialect, Some(name), timestamps, false))
-            .replace("{updatable_sqlx}", &sqlx_model_attribute(dialect, None, timestamps, timestamps))
+            .replace("{model_sqlx}", &sqlx_model_attribute(dialect, None, table, timestamps, timestamps))
+            .replace("{new_sqlx}", &sqlx_model_attribute(dialect, Some(name), table, timestamps, false))
+            .replace("{updatable_sqlx}", &sqlx_model_attribute(dialect, None, table, timestamps, timestamps))
     } else {
         let [find_body, list_body, delete_body, save_body, update_body] = EMPTY_BODIES;
         MODEL_TPL
@@ -1547,11 +1591,13 @@ fn render_model(name: &str, openapi: bool, graphql: bool, sqlx: bool, timestamps
     let (graphql_imports, graphql_output_derives, graphql_input_derives, graphql_resolvers) = if graphql {
         // the list query of --sqlx paginates, its fields are the arguments of the list resolver
         let (list_args, list_query) = if sqlx { (", offset: Option<usize>, limit: Option<usize>", " offset, limit ") } else { ("", "") };
-        let module = to_snake_case(name);
+        // the GraphQL fields are named after the model, `book_page` and `book_pages`
+        let field = to_snake_case(name);
         let resolvers = GRAPHQL_RESOLVERS
             .replace("{list_args}", list_args)
             .replace("{list_query}", list_query)
-            .replace("{plural}", &pluralize(&module))
+            .replace("{plural}", &pluralize(&field))
+            .replace("{field}", &field)
             .replace("{module}", &module)
             .replace("{relations_marker}", GRAPHQL_RELATIONS_MARKER);
         (GRAPHQL_IMPORTS, ", SimpleObject", ", InputObject", resolvers)
@@ -1689,6 +1735,8 @@ fn to_camel_case(name: &str) -> String {
 #[derive(Debug, PartialEq)]
 struct Through {
     model: String,
+    // join table, the snake_case model by default
+    table: String,
     // column of the join table referencing the child
     child_key: String,
 }
@@ -1699,6 +1747,9 @@ struct Through {
 struct Relation {
     parent: String,
     child: String,
+    // tables of the parent and the child, their snake_case model by default
+    parent_table: String,
+    child_table: String,
     // last segment of the route
     name: String,
     foreign_key: String,
@@ -1711,7 +1762,10 @@ impl Relation {
         Relation {
             name: name.unwrap_or_else(|| pluralize(&child_snake)),
             foreign_key: foreign_key.unwrap_or_else(|| format!("{}_id", to_snake_case(&parent))),
+            parent_table: to_snake_case(&parent),
+            child_table: child_snake.clone(),
             through: through.map(|model| Through {
+                table: to_snake_case(&model),
                 model,
                 child_key: child_key.unwrap_or_else(|| format!("{}_id", child_snake)),
             }),
@@ -1720,9 +1774,23 @@ impl Relation {
         }
     }
 
-    // Module of the relation, next to the models: `project_books`
+    // Replaces the default tables by the ones given
+    fn with_tables(mut self, parent_table: Option<String>, child_table: Option<String>, through_table: Option<String>) -> Relation {
+        if let Some(table) = parent_table {
+            self.parent_table = table;
+        }
+        if let Some(table) = child_table {
+            self.child_table = table;
+        }
+        if let (Some(through), Some(table)) = (self.through.as_mut(), through_table) {
+            through.table = table;
+        }
+        self
+    }
+
+    // Module of the relation, next to the models, named after the table of the parent: `project_books`
     fn module(&self) -> String {
-        format!("{}_{}", to_snake_case(&self.parent), self.name)
+        format!("{}_{}", self.parent_table, self.name)
     }
 
     // Type the `HasMany` trait is implemented on: `ProjectBooks`
@@ -1732,16 +1800,16 @@ impl Relation {
 
     // Table and column holding the foreign key, to index
     fn foreign_key_column(&self) -> (String, &str) {
-        let table = self.through.as_ref().map_or(&self.child, |through| &through.model);
-        (table.to_lowercase(), &self.foreign_key)
+        let table = self.through.as_ref().map_or(&self.child_table, |through| &through.table);
+        (table.clone(), &self.foreign_key)
     }
 }
 
 // Body of list_related: a page of the children, and the lookup of the parent when the page is empty,
 // to answer 404 for an unknown parent, `timestamps` skips the soft deleted rows
 fn relation_sqlx_body(relation: &Relation, timestamps: bool, dialect: Dialect) -> String {
-    let parent = relation.parent.to_lowercase();
-    let child = relation.child.to_lowercase();
+    let parent = &relation.parent_table;
+    let child = &relation.child_table;
     let placeholders = dialect.placeholders(3);
     let select = match &relation.through {
         None => format!(
@@ -1754,7 +1822,7 @@ fn relation_sqlx_body(relation: &Relation, timestamps: bool, dialect: Dialect) -
             placeholders[2]
         ),
         Some(through) => {
-            let join = through.model.to_lowercase();
+            let join = &through.table;
             format!(
                 "SELECT {child}.* FROM {child} JOIN {join} ON {join}.{child_key} = {child}.id WHERE {join}.{fk} = {p1}{live} ORDER BY {child}.id LIMIT {p2} OFFSET {p3}",
                 child = child,
@@ -1822,7 +1890,7 @@ fn relation_graphql_field(relation: &Relation) -> String {
     RELATION_GRAPHQL_FIELD
         .replace("{relation_name}", &relation.name)
         .replace("{parent_lower_case}", &relation.parent.to_lowercase())
-        .replace("{child_module}", &to_snake_case(&relation.child))
+        .replace("{child_module}", &relation.child_table)
         .replace("{child}", &relation.child)
         .replace("{module}", &relation.module())
 }
@@ -1863,7 +1931,14 @@ fn render_relation(relation: &Relation, openapi: bool, graphql: bool, sqlx: bool
             "",
         )
     };
+    // A self-referencing relation (e.g. the subcategories of a category) already imports its child with the parent
+    let child_import = if relation.child_table == relation.parent_table {
+        String::new()
+    } else {
+        format!("\n    use crate::{}::{};", relation.child_table, relation.child)
+    };
     RELATION_TPL
+        .replace("{child_import}", &child_import)
         .replace("{graphql_resolver}", if graphql { RELATION_GRAPHQL_RESOLVER } else { "" })
         .replace("{body}", &body)
         .replace("{query}", query)
@@ -1876,8 +1951,8 @@ fn render_relation(relation: &Relation, openapi: bool, graphql: bool, sqlx: bool
         .replace("{relation}", &relation.type_name())
         .replace("{relation_name}", &relation.name)
         .replace("{module}", &relation.module())
-        .replace("{parent_module}", &to_snake_case(&relation.parent))
-        .replace("{child_module}", &to_snake_case(&relation.child))
+        .replace("{parent_module}", &relation.parent_table)
+        .replace("{child_module}", &relation.child_table)
         .replace("{parent_lower_case}", &relation.parent.to_lowercase())
         .replace("{parent}", &relation.parent)
         .replace("{child}", &relation.child)
@@ -1893,8 +1968,7 @@ fn render_relation_migration(relation: &Relation, dialect: Dialect) -> String {
 const RELATION_TPL: &str = r#"
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::{parent_module}::{{parent}, Id};
-    use crate::{child_module}::{child};
+    use crate::{parent_module}::{{parent}, Id};{child_import}
     use serde::Deserialize;
     use octopux::{
         HasMany,
@@ -1937,7 +2011,7 @@ const RELATION_TPL: &str = r#"
 // Inserts the GraphQL field of the relation in the parent model, or explains how to add it
 // when the parent model is missing or was generated without --graphql
 fn add_relation_field(root: &Path, relation: &Relation) -> Result<(), Error> {
-    let path = source_path(root, &format!("{}.rs", to_snake_case(&relation.parent)));
+    let path = source_path(root, &format!("{}.rs", relation.parent_table));
     let source = fs::read_to_string(root.join(&path)).ok();
     match source.as_deref().and_then(|source| with_relation_field(source, relation).map(|patched| (source, patched))) {
         Some((source, patched)) if patched == source => {
@@ -2128,9 +2202,15 @@ fn main() -> Result<(), Error> {
 
 fn run(opt: Opt) -> Result<(), Error> {
     match opt {
-        Opt::GenerateModel { name, openapi, graphql, fields, sqlx, migration, foreign_keys, unique, sqlite: _, postgres, mysql, timestamps, force } => {
+        Opt::GenerateModel { name, openapi, graphql, fields, sqlx, migration, foreign_keys, unique, table, sqlite: _, postgres, mysql, timestamps, force } => {
             let dialect = Dialect::from_flags(postgres, mysql);
-            let module = to_snake_case(&name);
+            if let Some(invalid) = table.as_ref().filter(|t| !is_field_name(t)) {
+                eprintln!("{}", failure(&format!("`{}` is not a valid table name, use snake_case, model {} not generated", invalid, name)));
+                process::exit(1);
+            }
+            let table = table.unwrap_or_else(|| to_snake_case(&name));
+            // the file and the module are named after the table
+            let module = table.clone();
             let path = source_path(&std::env::current_dir()?, &format!("{}.rs", module));
             let overwrites = Path::new(&path).exists();
             refuse_overwrite(&path, force, &format!("model {}", name));
@@ -2138,7 +2218,6 @@ fn run(opt: Opt) -> Result<(), Error> {
             let fields = if fields {
                 let strict = if migration { Some(dialect) } else { None };
                 let tables = if foreign_keys { known_tables(dialect)? } else { Vec::new() };
-                let table = name.to_lowercase();
                 let references = foreign_keys.then_some((table.as_str(), tables.as_slice()));
                 read_fields(&mut io::stdin().lock(), &mut io::stdout(), timestamps, strict, references, unique)?
             } else {
@@ -2155,7 +2234,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                 process::exit(1);
             }
             let sql = if migration {
-                Some(render_migration(&name, &fields, timestamps, dialect).unwrap_or_else(|e| {
+                Some(render_migration(&table, &fields, timestamps, dialect).unwrap_or_else(|e| {
                     eprintln!("{}", failure(&format!("{}, model {} not generated", e, name)));
                     process::exit(1);
                 }))
@@ -2163,7 +2242,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                 None
             };
             let migration = match sql {
-                Some(sql) => Some((migration_path(&format!("create_{}", name.to_lowercase()))?, sql)),
+                Some(sql) => Some((migration_path(&format!("create_{}", table))?, sql)),
                 None => None,
             };
             // the fields were entered interactively, nothing is written before the recap is confirmed
@@ -2175,7 +2254,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                     process::exit(1);
                 }
             }
-            fs::write(&path, with_header("//", &render_model(&name, openapi, graphql, sqlx, timestamps, &fields, dialect)))?;
+            fs::write(&path, with_header("//", &render_table_model(&name, Some(&table), openapi, graphql, sqlx, timestamps, &fields, dialect)))?;
             println!("{}", success(&format!("Successfully generated model {}, declare it with `mod {};`", path, module)));
             if graphql {
                 add_graphql_roots(&std::env::current_dir()?, &module, &name)?;
@@ -2185,16 +2264,23 @@ fn run(opt: Opt) -> Result<(), Error> {
                 if overwrites {
                     println!(
                         "{}",
-                        warning(&format!("The migration creates the {} table only if it does not exist yet", name.to_lowercase()))
+                        warning(&format!("The migration creates the {} table only if it does not exist yet", table))
                     );
                 }
             }
             Ok(())
         }
-        Opt::GenerateRelation { parent, child, name, foreign_key, through, child_key, openapi, graphql, sqlx, migration, sqlite: _, postgres, mysql, timestamps, force } => {
+        Opt::GenerateRelation { parent, child, name, foreign_key, through, child_key, parent_table, child_table, through_table, openapi, graphql, sqlx, migration, sqlite: _, postgres, mysql, timestamps, force } => {
             let dialect = Dialect::from_flags(postgres, mysql);
-            let relation = Relation::new(parent, child, name, foreign_key, through, child_key);
-            let columns = [Some(&relation.name), Some(&relation.foreign_key), relation.through.as_ref().map(|t| &t.child_key)];
+            let relation = Relation::new(parent, child, name, foreign_key, through, child_key).with_tables(parent_table, child_table, through_table);
+            let columns = [
+                Some(&relation.name),
+                Some(&relation.foreign_key),
+                relation.through.as_ref().map(|t| &t.child_key),
+                Some(&relation.parent_table),
+                Some(&relation.child_table),
+                relation.through.as_ref().map(|t| &t.table),
+            ];
             if let Some(invalid) = columns.into_iter().flatten().find(|c| !is_field_name(c)) {
                 eprintln!("{}", failure(&format!("`{}` is not a valid name, use snake_case, relation not generated", invalid)));
                 process::exit(1);
@@ -2225,7 +2311,7 @@ fn run(opt: Opt) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        migration_timestamp, migrations_dir, source_path, parse_field_type, pluralize, read_fields, render_migration, render_model, render_relation, render_relation_migration, to_camel_case,
+        migration_timestamp, migrations_dir, source_path, parse_field_type, pluralize, read_fields, render_migration, render_model, render_table_model, render_relation, render_relation_migration, to_camel_case,
         to_snake_case, bootstrap, bootstrap_dependencies, render_bootstrap_main, changes_summary, confirm, confirm_save, generated_header, migration_tables, parse_tables, postgres_column_type, url_dialect,
         Cli, Column, Dialect, Field, Opt, Reference, Relation, Table, Through, LOGO,
     };
@@ -2968,7 +3054,7 @@ CREATE INDEX book_idx ON book (code);
         assert_eq!(categories.name, "project_categories");
         assert_eq!(categories.type_name(), "ProjectProjectCategories");
         let through = relation("Project", "Category", Some("ProjectCategory"));
-        assert_eq!(through.through, Some(Through { model: "ProjectCategory".into(), child_key: "category_id".into() }));
+        assert_eq!(through.through, Some(Through { model: "ProjectCategory".into(), table: "project_category".into(), child_key: "category_id".into() }));
         let named = Relation::new("Project".into(), "Book".into(), Some("drafts".into()), Some("owner_id".into()), None, None);
         assert_eq!((named.name.as_str(), named.foreign_key.as_str(), named.module()), ("drafts", "owner_id", "project_drafts".to_string()));
     }
@@ -2985,6 +3071,13 @@ CREATE INDEX book_idx ON book (code);
         assert!(rel.contains("`.configure(project_books::configure)`"));
         assert!(!rel.contains("JsonSchema"));
         assert!(!rel.contains("sqlx"));
+    }
+
+    #[test]
+    fn self_referencing_relation_imports_its_model_once() {
+        let rel = render_relation(&relation("Category", "Category", None), false, false, false, false, Dialect::Sqlite);
+        assert!(rel.contains("use crate::category::{Category, Id};\n    use serde::Deserialize;"));
+        assert_eq!(rel.matches("use crate::category::").count(), 1);
     }
 
     #[test]
@@ -3010,9 +3103,9 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn sqlx_relation_joins_the_through_table() {
         let rel = render_relation(&relation("Project", "Category", Some("ProjectCategory")), false, false, true, false, Dialect::Postgres);
-        assert!(rel.contains("\"SELECT category.* FROM category JOIN projectcategory ON projectcategory.category_id = category.id WHERE projectcategory.project_id = $1 ORDER BY category.id LIMIT $2 OFFSET $3\""));
+        assert!(rel.contains("\"SELECT category.* FROM category JOIN project_category ON project_category.category_id = category.id WHERE project_category.project_id = $1 ORDER BY category.id LIMIT $2 OFFSET $3\""));
         let rel = render_relation(&relation("Project", "Category", Some("ProjectCategory")), false, false, true, true, Dialect::Postgres);
-        assert!(rel.contains("WHERE projectcategory.project_id = $1 AND category.deleted_at IS NULL AND projectcategory.deleted_at IS NULL ORDER BY"));
+        assert!(rel.contains("WHERE project_category.project_id = $1 AND category.deleted_at IS NULL AND project_category.deleted_at IS NULL ORDER BY"));
     }
 
     #[test]
@@ -3023,7 +3116,7 @@ CREATE INDEX book_idx ON book (code);
         );
         assert_eq!(
             render_relation_migration(&relation("Project", "Category", Some("ProjectCategory")), Dialect::Mysql),
-            "CREATE INDEX projectcategory_project_id_idx ON projectcategory (project_id);\n"
+            "CREATE INDEX project_category_project_id_idx ON project_category (project_id);\n"
         );
     }
 
@@ -3312,5 +3405,46 @@ CREATE INDEX book_idx ON book (code);
         let deps = bootstrap_dependencies(false, false);
         assert_eq!(deps[0], ["octopux", "--git", "https://github.com/ctaque/octopux", "--tag", tag.as_str(), "--features", "sqlx"]);
         assert!(!deps.iter().any(|d| d[0].starts_with("apistos")));
+    }
+
+    #[test]
+    fn table_option_names_the_table_of_the_sqlx_derives() {
+        let fields = [field("title", "String")];
+        let model = render_table_model("BookPage", Some("book_page"), false, false, true, false, &fields, Dialect::Sqlite);
+        assert!(model.contains("#[sqlx_model(database = \"sqlite\", table = \"book_page\")]\n    #[octopux_info(path = \"bookpage\")]\n    pub struct BookPage {"));
+        assert!(model.contains("#[sqlx_model(database = \"sqlite\", model = \"BookPage\", table = \"book_page\")]\n    pub struct NewBookPage {"));
+        assert!(model.contains("#[sqlx_model(database = \"sqlite\", table = \"book_page\")]\n    pub struct UpdatableBookPage {"));
+        // the default table is left to the derives
+        assert_eq!(render_table_model("BookPage", Some("bookpage"), false, false, true, false, &fields, Dialect::Sqlite), render_model("BookPage", false, false, true, false, &fields, Dialect::Sqlite));
+        let opt = Opt::from_iter_safe(["octopux", "generate-model", "--name", "BookPage", "--table", "book_page"]).unwrap();
+        assert!(matches!(opt, Opt::GenerateModel { table: Some(ref t), .. } if t == "book_page"));
+        // the GraphQL fields keep the model name, the root to merge names the module of the table
+        let model = render_table_model("BookPage", Some("pages"), false, true, true, false, &fields, Dialect::Sqlite);
+        assert!(model.contains("async fn book_page(") && model.contains("async fn create_book_page(") && model.contains("struct Query(pages::BookPageQuery, ...)"));
+    }
+
+    #[test]
+    fn keyword_fields_are_raw_identifiers() {
+        let model = render_model("Project", false, false, false, false, &[field("type", "i32"), field("name", "String")], Dialect::Sqlite);
+        assert!(model.contains("pub r#type: i32,\n        pub name: String,"));
+        assert!(super::is_field_name("type"));
+        assert!(!super::is_field_name("self"));
+    }
+
+    #[test]
+    fn relation_tables_replace_the_lowercase_models() {
+        let relation = Relation::new("Project".into(), "Category".into(), None, None, Some("ProjectCategory".into()), None).with_tables(
+            Some("projects".into()),
+            Some("categories".into()),
+            Some("project_category".into()),
+        );
+        let body = render_relation(&relation, false, false, true, false, Dialect::Sqlite);
+        assert!(body.contains("SELECT categories.* FROM categories JOIN project_category ON project_category.category_id = categories.id WHERE project_category.project_id = $1"));
+        assert!(body.contains("SELECT id FROM projects WHERE id = $1"));
+        // the modules are named after the tables
+        assert!(body.contains("use crate::projects::{Project, Id};\n    use crate::categories::Category;"));
+        assert_eq!(relation.module(), "projects_categories");
+        assert_eq!(render_relation_migration(&relation, Dialect::Sqlite), "CREATE INDEX IF NOT EXISTS project_category_project_id_idx ON project_category (project_id);\n");
+        assert!(Opt::from_iter_safe(["octopux", "generate-relation", "--parent", "A", "--child", "B", "--through-table", "ab"]).is_err());
     }
 }

@@ -57,6 +57,7 @@ Generate JSON CRUD endpoints for [Actix Web](https://actix.rs) from your structs
   - [--bootstrap](#--bootstrap)
   - [generate-model](#generate-model)
   - [generate-relation](#generate-relation)
+  - [Reverse engineering a database](#reverse-engineering-a-database)
 - [Examples](#examples)
 - [Issues](#issues)
 
@@ -398,6 +399,7 @@ Generates `project.rs`, to declare with `mod project;`. Its structs are public, 
 | `--migration` | Create the SQL migration of the table (requires `--fields`) |
 | `--foreign-keys` | Ask, for each field, for the table and the column it references, see [below](#--foreign-keys) (requires `--migration`) |
 | `--unique` | Ask, for each field, whether its column is unique, see [below](#--unique) (requires `--migration`) |
+| `--table` | The table of the sqlx queries and the migration, the snake_case model name by default (`book_page` for `BookPage`) |
 | `--sqlite` (default), `--postgres`, `--mysql` | The database targeted by `--sqlx` and `--migration` |
 | `--timestamps` | Add `created_at`, `updated_at` and `deleted_at` fields, with soft delete |
 | `--openapi` | Derive `JsonSchema` and `ApiComponent`, and generate the `configure` function mounting the documented routes |
@@ -558,6 +560,7 @@ Generates a [has-many relation](#has-many-relations) in `project_books.rs` for t
 | `--foreign-key` | The column of the children referencing the parent, `project_id` by default |
 | `--through` | For a many-to-many relation: the join model |
 | `--child-key` | With `--through`: the column of the join model referencing the child, `category_id` by default |
+| `--parent-table`, `--child-table`, `--through-table` | The tables of the parent, the child and the join model, their snake_case model name by default |
 | `--sqlx` | `list_related` selects a page of the children ordered by id (`offset`, and `limit` of 20 by default and 100 at most), and looks the parent up only when the page is empty, to answer 404 for an unknown parent |
 | `--migration` | Create the migration indexing the foreign key (`<timestamp>_index_book_project_id.sql`). Generate it **after** the migration creating the table |
 | `--timestamps` | Skip the soft deleted children, join rows and parents |
@@ -575,6 +578,50 @@ Many-to-many: the categories of a project, through a `ProjectCategory` join mode
 ```bash
 octopux generate-relation --parent Project --child Category --through ProjectCategory --sqlx --openapi --migration --postgres
 ```
+
+### Reverse engineering a database
+
+`octopux-reverse` generates the models and relations of an existing database: it reads its tables, then pipes their columns to `octopux generate-model --fields` and their foreign keys to `octopux generate-relation`.
+
+```bash
+cargo install octopux-reverse
+
+# print the octopux commands as a shell script, to review, then run them
+DATABASE_URL=postgres://localhost/my_db octopux-reverse --openapi > reverse.sh
+sh reverse.sh
+
+# or run them directly
+octopux-reverse --database-url postgres://localhost/my_db --openapi --run
+```
+
+Each table becomes a model named after its singular (`books` gives `Book`, generated with `--table books`), with a field per column (nullable columns are `Option<T>`), and is generated with `--sqlx` for the database of the url:
+
+```bash
+octopux generate-model --name Book --table books --fields --sqlx --postgres --openapi <<'EOF'
+title:String
+author_id:i64
+summary:Option<String>
+
+y
+EOF
+```
+
+- A table is a model when its primary key is an `id` column decoding into `i64` (`INTEGER` with SQLite, `INT8`/`BIGSERIAL` with PostgreSQL, `BIGINT` with MySQL), and it has another column.
+- `created_at`, `updated_at` and `deleted_at` timestamp columns (`TIMESTAMPTZ` with PostgreSQL) give `--timestamps`.
+- The columns whose type has no field type (`geometry`, custom enums...) or whose name is not snake_case are left out, with a warning. `uuid`, `numeric` and `json` columns give `uuid::Uuid`, `rust_decimal::Decimal` and `serde_json::Value` fields, which need the matching sqlx features.
+- A column named after a keyword gives a raw identifier field (`r#type`).
+
+Then each single column foreign key referencing the `id` of a model gives a has-many relation of the referenced model (`GET /author/{id}/books`). A join table, holding only two such foreign keys (besides an `id` and the timestamps), also gives the many-to-many relations of its two models, in both directions. Two relations of a parent to the same child are told apart by their foreign key (`books_by_editor`). The script ends with the `mod` declarations and the `.configure` calls to add to `src/main.rs`.
+
+| Option | Description |
+| --- | --- |
+| `--database-url` | The database to read, `DATABASE_URL` by default |
+| `--migrations` | Apply the sqlx migrations of this folder before reading the tables: to a throwaway `--database-url` database, or to an in-memory SQLite database without one |
+| `--tables`, `--exclude` | Only read, or leave out, these tables (comma separated) |
+| `--no-relations` | Only generate the models |
+| `--openapi`, `--graphql`, `--force` | Passed to the `octopux` commands |
+| `--run` | Run the `octopux` commands in the working directory instead of printing them |
+| `--octopux` | The octopux CLI, `octopux` by default |
 
 ## Examples
 

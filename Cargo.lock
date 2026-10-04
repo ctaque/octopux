@@ -1935,6 +1935,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "octopux-reverse"
+version = "0.19.1"
+dependencies = [
+ "sqlx",
+ "structopt",
+ "tokio",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -6,6 +6,7 @@ members = [
     "octopux",
     "octopux-derive",
     "octopux-cli",
+    "octopux-reverse",
     "examples/*",
 ]
 
