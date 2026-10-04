@@ -222,6 +222,7 @@ fn model(table: &Table, dialect: Dialect, warnings: &mut Vec<String>) -> Result<
     }
     let primary_key: Vec<&str> = table.columns.iter().filter(|c| c.primary_key).map(|c| c.name.as_str()).collect();
     match (primary_key.as_slice(), table.column("id")) {
+        (["id"], Some(id)) if id.nullable => return Err("its `id` can be NULL, the octopux models need a NOT NULL one".to_string()),
         (["id"], Some(id)) if is_id_type(dialect, &id.sql_type) => {}
         (["id"], Some(id)) => return Err(format!("its `id` is a {}, the octopux models need a signed 64 bit integer", id.sql_type)),
         _ => return Err("its primary key is not an `id` column".to_string()),
@@ -505,6 +506,7 @@ mod tests {
             table("tag", vec![column("id", "int4", false), column("label", "text", false)], &[]),
             table("settings", vec![column("key", "text", false), column("value", "text", true)], &[]),
             table("empty", vec![id()], &[]),
+            table("draft", vec![column("id", "int8", true), column("body", "text", false)], &[]),
         ];
         let plan = plan(&tables, Dialect::Postgres);
         assert_eq!(
@@ -522,6 +524,7 @@ mod tests {
                 "tag: no model, its `id` is a int4, the octopux models need a signed 64 bit integer",
                 "settings: no model, its primary key is not an `id` column",
                 "empty: no model, it has no column besides `id` and the timestamps",
+                "draft: no model, its `id` can be NULL, the octopux models need a NOT NULL one",
             ]
         );
     }

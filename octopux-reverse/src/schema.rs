@@ -219,11 +219,22 @@ impl Database {
                             .fetch_all(&mut *conn)
                             .await
                             .map_err(error)?;
+                    let without_rowid: bool = sqlx::query_scalar("SELECT wr FROM pragma_table_list($1) WHERE schema = 'main'")
+                        .bind(&name)
+                        .fetch_one(&mut *conn)
+                        .await
+                        .map_err(error)?;
+                    // a primary key column holds NULL, unless it is NOT NULL, the INTEGER alias of the rowid
+                    // or in a WITHOUT ROWID table (https://sqlite.org/lang_createtable.html#the_primary_key)
+                    let rowid_alias = columns.iter().filter(|(_, _, _, pk)| *pk > 0).count() == 1;
                     let mut table = Table {
                         name: name.clone(),
                         columns: columns
                             .into_iter()
-                            .map(|(name, sql_type, not_null, pk)| Column { name, sql_type, nullable: not_null == 0 && pk == 0, primary_key: pk > 0 })
+                            .map(|(name, sql_type, not_null, pk)| {
+                                let not_null = not_null != 0 || (pk > 0 && (without_rowid || (rowid_alias && sql_type.eq_ignore_ascii_case("INTEGER"))));
+                                Column { name, sql_type, nullable: !not_null, primary_key: pk > 0 }
+                            })
                             .collect(),
                         foreign_keys: Vec::new(),
                     };
@@ -290,14 +301,19 @@ mod tests {
                     author_id INTEGER REFERENCES author,
                     a INTEGER, b INTEGER,
                     FOREIGN KEY (a, b) REFERENCES pair (x, y)
-                );",
+                );
+                CREATE TABLE tag (id BIGINT PRIMARY KEY, name TEXT);
+                CREATE TABLE label (id BIGINT PRIMARY KEY, name TEXT) WITHOUT ROWID;",
             )
             .execute(&mut *conn)
             .await
             .unwrap();
             db.tables().await.unwrap()
         });
-        assert_eq!(tables.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["author", "book"]);
+        assert_eq!(tables.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["author", "book", "label", "tag"]);
+        // only an INTEGER primary key aliases the rowid, a BIGINT one holds NULL outside a WITHOUT ROWID table
+        assert_eq!(tables[2].column("id").map(|c| c.nullable), Some(false));
+        assert_eq!(tables[3].column("id").map(|c| c.nullable), Some(true));
         let book = &tables[1];
         assert_eq!(book.column("id"), Some(&Column { name: "id".into(), sql_type: "INTEGER".into(), nullable: false, primary_key: true }));
         assert_eq!(book.column("title").map(|c| c.nullable), Some(false));
