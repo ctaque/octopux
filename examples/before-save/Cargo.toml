@@ -21,3 +21,4 @@ sqlx.workspace = true
 async-trait.workspace = true
 argon2 = "0.6.0"
 env_logger.workspace = true
+async-graphql = { version = "7.2.1", features = ["chrono"] }

@@ -1,5 +1,5 @@
-#[path = "Model.rs"]
-mod model;
+#[path = "my_model.rs"]
+mod my_model;
 #[path = "helpers.rs"]
 mod shared;
 mod hooks;
@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()>{
             // so resources living under the same scope must be registered together
             .service(
                 apistos::web::scope("v1")
-                    .configure(model::configure)
+                    .configure(my_model::configure)
             )
             .app_data(state.clone())
             .build_with(
