@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "octopux"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "actix-web",
  "anyhow",
@@ -1916,7 +1916,7 @@ dependencies = [
 
 [[package]]
 name = "octopux-cli"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "sqlx",
@@ -1926,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "octopux-derive"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -1936,7 +1936,7 @@ dependencies = [
 
 [[package]]
 name = "octopux-reverse"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "sqlx",
  "structopt",
