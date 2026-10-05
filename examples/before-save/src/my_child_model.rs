@@ -46,9 +46,9 @@
         UpdatableModel,
     };
     use chrono::{DateTime, Utc};
-    use octopux::gen_documented_endpoint;
-    use schemars::JsonSchema;
     use apistos::ApiComponent;
+    use schemars::JsonSchema;
+    use octopux::gen_documented_endpoint;
     use async_graphql::{ComplexObject, Context, InputObject, Object, SimpleObject};
 
     #[derive(Default, Deserialize, JsonSchema, ApiComponent)]
@@ -70,12 +70,12 @@
 
     #[derive(Default, Serialize, Deserialize, JsonSchema, ApiComponent, SimpleObject, sqlx::FromRow, HttpFindListDelete, SqlxModel)]
     #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
-    #[sqlx_model(database = "postgres", table = "my_model", timestamps, soft_delete)]
-    #[octopux_info(path = "mymodel")]
+    #[sqlx_model(database = "postgres", table = "my_child_model", timestamps, soft_delete)]
+    #[octopux_info(path = "mychildmodel")]
     #[graphql(complex)]
-    pub struct MyModel {
+    pub struct MyChildModel {
         pub id: Id,
-        pub password: String,
+        pub email: String,
         pub created_at: Option<DateTime<Utc>>,
         pub updated_at: Option<DateTime<Utc>>,
         pub deleted_at: Option<DateTime<Utc>>,
@@ -83,61 +83,61 @@
 
     #[derive(Serialize, Deserialize, JsonSchema, ApiComponent, InputObject, HttpCreate, SqlxNewModel)]
     #[http_create(SaveQuery, AppState)]
-    #[sqlx_model(database = "postgres", model = "MyModel", table = "my_model", timestamps, before_save)]
-    pub struct NewMyModel {
-        pub password: String,
+    #[sqlx_model(database = "postgres", model = "MyChildModel", table = "my_child_model", timestamps, before_save)]
+    pub struct NewMyChildModel {
+        pub email: String,
     }
 
     #[derive(Serialize, Deserialize, JsonSchema, ApiComponent, InputObject, sqlx::FromRow, HttpUpdate, SqlxUpdatableModel)]
-    #[http_update(Id, UpdateQuery, MyModel, FindQuery, AppState)]
-    #[sqlx_model(database = "postgres", table = "my_model", timestamps, soft_delete, before_save)]
-    pub struct UpdatableMyModel {
+    #[http_update(Id, UpdateQuery, MyChildModel, FindQuery, AppState)]
+    #[sqlx_model(database = "postgres", table = "my_child_model", timestamps, soft_delete, before_save)]
+    pub struct UpdatableMyChildModel {
         pub id: Id,
-        pub password: String,
+        pub email: String,
         pub updated_at: Option<DateTime<Utc>>,
     }
 
-    // Registers the documented routes of the mymodel endpoint
-    // (octopux `openapi` feature), to mount with `.configure(my_model::configure)`
+    // Registers the documented routes of the mychildmodel endpoint
+    // (octopux `openapi` feature), to mount with `.configure(mychildmodel::configure)`
     pub fn configure(cfg: &mut apistos::web::ServiceConfig) {
-        gen_documented_endpoint!(MyModel, NewMyModel, UpdatableMyModel)(cfg)
+        gen_documented_endpoint!(MyChildModel, NewMyChildModel, UpdatableMyChildModel)(cfg)
     }
 
 
-    // Fields of the GraphQL MyModel type resolved by functions, its has-many relations
+    // Fields of the GraphQL MyChildModel type resolved by functions, its has-many relations
     #[ComplexObject]
-    impl MyModel {
+    impl MyChildModel {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
     }
 
-    // GraphQL queries of the mymodel model (async-graphql), to merge into the query root of the schema:
-    // `#[derive(MergedObject, Default)] struct Query(my_model::MyModelQuery, ...);`
+    // GraphQL queries of the mychildmodel model (async-graphql), to merge into the query root of the schema:
+    // `#[derive(MergedObject, Default)] struct Query(my_child_model::MyChildModelQuery, ...);`
     #[derive(Default)]
-    pub struct MyModelQuery;
+    pub struct MyChildModelQuery;
 
     #[Object]
-    impl MyModelQuery {
-        async fn my_model(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<MyModel> {
+    impl MyChildModelQuery {
+        async fn my_child_model(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<MyChildModel> {
             find(id, app_state(ctx)?).await
         }
 
-        async fn my_models(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<MyModel>> {
-            Ok(MyModel::list(&ListQuery { offset, limit }, app_state(ctx)?).await?)
+        async fn my_child_models(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<MyChildModel>> {
+            Ok(MyChildModel::list(&ListQuery { offset, limit }, app_state(ctx)?).await?)
         }
     }
 
-    // GraphQL mutations of the mymodel model, to merge into the mutation root of the schema:
-    // `#[derive(MergedObject, Default)] struct Mutation(my_model::MyModelMutation, ...);`
+    // GraphQL mutations of the mychildmodel model, to merge into the mutation root of the schema:
+    // `#[derive(MergedObject, Default)] struct Mutation(my_child_model::MyChildModelMutation, ...);`
     #[derive(Default)]
-    pub struct MyModelMutation;
+    pub struct MyChildModelMutation;
 
     #[Object]
-    impl MyModelMutation {
-        async fn create_my_model(&self, ctx: &Context<'_>, input: NewMyModel) -> async_graphql::Result<MyModel> {
+    impl MyChildModelMutation {
+        async fn create_my_child_model(&self, ctx: &Context<'_>, input: NewMyChildModel) -> async_graphql::Result<MyChildModel> {
             Ok(input.save(&SaveQuery {}, app_state(ctx)?).await?)
         }
 
-        async fn update_my_model(&self, ctx: &Context<'_>, input: UpdatableMyModel) -> async_graphql::Result<MyModel> {
+        async fn update_my_child_model(&self, ctx: &Context<'_>, input: UpdatableMyChildModel) -> async_graphql::Result<MyChildModel> {
             let state = app_state(ctx)?;
             let id = input.id;
             find(id, state).await?;
@@ -145,16 +145,16 @@
             find(id, state).await
         }
 
-        async fn delete_my_model(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<MyModel> {
+        async fn delete_my_child_model(&self, ctx: &Context<'_>, id: Id) -> async_graphql::Result<MyChildModel> {
             let state = app_state(ctx)?;
             let model = find(id, state).await?;
             Ok(model.delete(&DeleteQuery {}, state).await?)
         }
     }
 
-    // Looks the mymodel up, any error being ENTITY_NOT_FOUND as for the REST routes
-    async fn find(id: Id, state: &AppState) -> async_graphql::Result<MyModel> {
-        match MyModel::find(id, &FindQuery::default(), state).await {
+    // Looks the mychildmodel up, any error being ENTITY_NOT_FOUND as for the REST routes
+    async fn find(id: Id, state: &AppState) -> async_graphql::Result<MyChildModel> {
+        match MyChildModel::find(id, &FindQuery::default(), state).await {
             Ok(model) => Ok(*model),
             Err(_) => Err(async_graphql::Error::new("ENTITY_NOT_FOUND")),
         }
