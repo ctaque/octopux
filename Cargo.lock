@@ -2457,8 +2457,10 @@ name = "octopux-cli"
 version = "0.20.1"
 dependencies = [
  "chrono",
+ "proc-macro2",
  "sqlx",
  "structopt",
+ "syn 3.0.6",
  "tokio",
 ]
 

@@ -2,6 +2,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use sqlx::TypeInfo;
 use structopt::clap::ArgGroup;
 use structopt::StructOpt;
+use syn::spanned::Spanned;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write, Error};
 use std::path::{Path, PathBuf};
@@ -201,6 +202,44 @@ pub enum Opt {
         force: bool,
         /// The folder of the relation file, created if missing, src when it exists by default, the working directory otherwise,
         /// with --graphql, the parent model is looked up in it
+        #[structopt(long = "output", parse(from_os_str))]
+        output: Option<PathBuf>,
+    },
+    /// Interactively prompts for fields added to the model, creatable and updatable structs of an existing model,
+    /// without regenerating it: the code written in the file is kept, requires one of --sqlite, --postgres or --mysql
+    #[structopt(name = "add-field", group = ArgGroup::with_name("database").required(true))]
+    AddField {
+        /// The model the fields are added to, `Book` for the `Book`, `NewBook` and `UpdatableBook` structs
+        #[structopt(short = "m", long = "model")]
+        model: String,
+        /// Creates the migration adding the columns in the migrations folder next to src
+        #[structopt(long = "migration")]
+        migration: bool,
+        /// Asks, for each field, for the table and the column it references, the migration declares the foreign keys,
+        /// requires --migration
+        #[structopt(long = "foreign-keys", requires = "migration")]
+        foreign_keys: bool,
+        /// Asks, for each field, whether its column is unique, the migration creates the unique indexes,
+        /// requires --migration
+        #[structopt(long = "unique", requires = "migration")]
+        unique: bool,
+        /// SQL default of the added non-optional columns, set on the existing rows (quote the strings: `--default "'none'"`),
+        /// asked for each of them otherwise, requires --migration
+        #[structopt(long = "default", requires = "migration")]
+        default: Option<String>,
+        /// The table of the model, the snake_case model name by default (`book_page` for `BookPage`)
+        #[structopt(long = "table", hidden = true)]
+        table: Option<String>,
+        /// Targets SQLite with the migration
+        #[structopt(long = "sqlite", group = "database")]
+        sqlite: bool,
+        /// Targets PostgreSQL with the migration
+        #[structopt(long = "postgres", group = "database")]
+        postgres: bool,
+        /// Targets MySQL with the migration
+        #[structopt(long = "mysql", group = "database")]
+        mysql: bool,
+        /// The folder of the model file, src when it exists by default, the working directory otherwise
         #[structopt(long = "output", parse(from_os_str))]
         output: Option<PathBuf>,
     },
@@ -490,7 +529,7 @@ const TIMESTAMP_TYPE: &str = "Option<DateTime<Utc>>";
 // Type behind the `Id` alias of the generated model
 const ID_TYPE: &str = "i64";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Field {
     name: String,
     ty: String,
@@ -616,10 +655,26 @@ fn read_fields<R: BufRead, W: Write>(
     tables: Option<(&str, &[Table])>,
     unique: bool,
 ) -> Result<Vec<Field>, Error> {
+    read_new_fields(input, output, timestamps, &[], dialect, tables, unique)
+}
+
+// `read_fields` of a model already declaring the fields `declared`, whose names are refused
+fn read_new_fields<R: BufRead, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    timestamps: bool,
+    declared: &[String],
+    dialect: Option<Dialect>,
+    tables: Option<(&str, &[Table])>,
+    unique: bool,
+) -> Result<Vec<Field>, Error> {
     let mut fields: Vec<Field> = Vec::new();
-    let reserved: &[&str] = if timestamps { &["id", "created_at", "updated_at", "deleted_at"] } else { &["id"] };
+    let mut reserved: Vec<&str> = if timestamps { vec!["id", "created_at", "updated_at", "deleted_at"] } else { vec!["id"] };
+    reserved.extend(declared.iter().map(String::as_str));
     writeln!(output, "{}", bold("Model fields"))?;
-    if timestamps {
+    if !declared.is_empty() {
+        writeln!(output, "{}", highlight(&format!("Enter the fields to add (empty name to finish), the model already declares {}", declared.join(", "))))?;
+    } else if timestamps {
         writeln!(output, "{}", highlight(&format!("Enter the model fields (empty name to finish), `id: Id` ({}), `created_at`, `updated_at` and `deleted_at` are already declared", ID_TYPE)))?;
     } else {
         writeln!(output, "{}", highlight(&format!("Enter the model fields (empty name to finish), `id: Id` ({}) is already declared", ID_TYPE)))?;
@@ -908,6 +963,20 @@ const COLUMN_CONSTRAINTS: &[&str] = &[
     "NOT", "NULL", "PRIMARY", "REFERENCES", "DEFAULT", "UNIQUE", "AUTO_INCREMENT", "AUTOINCREMENT", "CHECK", "CONSTRAINT", "GENERATED", "COLLATE",
 ];
 
+// First keywords of the table constraints
+const TABLE_CONSTRAINTS: &[&str] = &["CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK", "KEY", "INDEX"];
+
+// The column a single column PRIMARY KEY or UNIQUE table constraint makes unique
+fn unique_key(constraint: &str) -> Option<String> {
+    let upper = constraint.to_ascii_uppercase();
+    let unique = (upper.contains("PRIMARY KEY") || upper.contains("UNIQUE")) && !upper.contains("FOREIGN KEY");
+    let (open, close) = (constraint.find('(')?, constraint.find(')')?);
+    match constraint[open + 1..close].split(',').collect::<Vec<_>>().as_slice() {
+        [key] if unique => Some(sql_name(key.trim())),
+        _ => None,
+    }
+}
+
 // Columns of a CREATE TABLE body, the single column PRIMARY KEY and UNIQUE table constraints mark their column unique
 fn parse_columns(body: &str) -> Vec<Column> {
     let mut columns = Vec::new();
@@ -916,14 +985,8 @@ fn parse_columns(body: &str) -> Vec<Column> {
         let upper = definition.to_ascii_uppercase();
         let words: Vec<&str> = definition.split_whitespace().collect();
         let first = upper.split_whitespace().next().unwrap_or_default();
-        if ["CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK", "KEY", "INDEX"].contains(&first) {
-            let unique = (upper.contains("PRIMARY KEY") || upper.contains("UNIQUE")) && !upper.contains("FOREIGN KEY");
-            if let (true, Some(open), Some(close)) = (unique, definition.find('('), definition.find(')')) {
-                let keys: Vec<&str> = definition[open + 1..close].split(',').collect();
-                if let [key] = keys.as_slice() {
-                    unique_keys.push(sql_name(key.trim()));
-                }
-            }
+        if TABLE_CONSTRAINTS.contains(&first) {
+            unique_keys.extend(unique_key(definition));
             continue;
         }
         let sql_type: Vec<&str> = words[1..]
@@ -970,7 +1033,8 @@ fn parse_tables(sql: &str) -> Vec<Table> {
     tables
 }
 
-// Tables created by the migrations of `dir`, in the order of the migrations,
+// Tables created by the migrations of `dir`, in the order of the migrations, with the columns added, dropped and renamed
+// and the unique indexes created by the following statements,
 // a table created by several migrations keeps its first definition, which `IF NOT EXISTS` applies
 fn migration_tables(dir: &Path) -> Vec<Table> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
@@ -982,13 +1046,145 @@ fn migration_tables(dir: &Path) -> Vec<Table> {
     let mut tables: Vec<Table> = Vec::new();
     for path in paths {
         let Ok(sql) = fs::read_to_string(&path) else { continue };
-        for table in parse_tables(&sql) {
-            if !tables.iter().any(|t| t.name == table.name) {
-                tables.push(table);
-            }
+        for statement in sql_statements(&sql) {
+            apply_statement(&mut tables, &statement);
         }
     }
     tables
+}
+
+// The statements of a migration, without their comments, split on the semicolons outside the quotes
+fn sql_statements(sql: &str) -> Vec<String> {
+    let sql = sql.lines().map(|line| line.split("--").next().unwrap_or_default()).collect::<Vec<_>>().join("\n");
+    let mut statements = Vec::new();
+    let (mut quote, mut start) = (None, 0);
+    for (i, c) in sql.char_indices() {
+        match (c, quote) {
+            ('\'' | '"' | '`', None) => quote = Some(c),
+            (c, Some(q)) if c == q => quote = None,
+            (';', None) => {
+                statements.push(sql[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    statements.push(sql[start..].trim().to_string());
+    statements.into_iter().filter(|s| !s.is_empty()).collect()
+}
+
+// The words of `sql` after the leading keywords of `skipped` it starts with (`IF NOT EXISTS`...), case insensitive
+fn skip_keywords<'a>(sql: &'a str, skipped: &[&str]) -> &'a str {
+    let mut rest = sql.trim_start();
+    'next: loop {
+        for keywords in skipped {
+            let words: Vec<&str> = rest.splitn(keywords.split_whitespace().count() + 1, char::is_whitespace).collect();
+            let matches = keywords.split_whitespace().zip(&words).all(|(k, w)| w.eq_ignore_ascii_case(k));
+            if matches && words.len() > keywords.split_whitespace().count() {
+                rest = words.last().unwrap_or(&"").trim_start();
+                continue 'next;
+            }
+        }
+        return rest;
+    }
+}
+
+// The first word of `sql` and the rest, an SQL name ending at a parenthesis too (`book(isbn)`)
+fn first_word(sql: &str) -> (&str, &str) {
+    let sql = sql.trim_start();
+    let end = sql.find(|c: char| c.is_whitespace() || c == '(').unwrap_or(sql.len());
+    (&sql[..end], sql[end..].trim_start())
+}
+
+// Applies a CREATE TABLE, ALTER TABLE, CREATE UNIQUE INDEX or DROP TABLE statement to the tables of the migrations,
+// the other statements are ignored
+fn apply_statement(tables: &mut Vec<Table>, statement: &str) {
+    let words: Vec<String> = statement.split_whitespace().take(3).map(str::to_ascii_uppercase).collect();
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        ["CREATE", "TABLE", ..] => {
+            for table in parse_tables(statement) {
+                if !tables.iter().any(|t| t.name == table.name) {
+                    tables.push(table);
+                }
+            }
+        }
+        ["DROP", "TABLE", ..] => {
+            let names = skip_keywords(&statement[statement.to_ascii_uppercase().find("TABLE").unwrap_or(0) + 5..], &["IF EXISTS"]);
+            for name in names.split(',') {
+                let name = sql_name(first_word(name).0);
+                tables.retain(|t| t.name != name);
+            }
+        }
+        ["ALTER", "TABLE", ..] => {
+            let rest = skip_keywords(&statement[statement.to_ascii_uppercase().find("TABLE").unwrap_or(0) + 5..], &["IF EXISTS", "ONLY"]);
+            let (name, actions) = first_word(rest);
+            let name = sql_name(name);
+            let Some(table) = tables.iter_mut().find(|t| t.name == name) else { return };
+            for action in split_top_level(actions) {
+                apply_alter_action(table, action);
+            }
+        }
+        ["CREATE", "UNIQUE", "INDEX"] => {
+            let upper = statement.to_ascii_uppercase();
+            let Some(on) = upper.find(" ON ") else { return };
+            let (name, columns) = first_word(skip_keywords(&statement[on + 4..], &["ONLY"]));
+            let name = sql_name(name);
+            if let (Some(table), Some(column)) = (tables.iter_mut().find(|t| t.name == name), unique_key(&format!("UNIQUE {}", columns))) {
+                for c in table.columns.iter_mut().filter(|c| c.name == column) {
+                    c.unique = true;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// Applies an action of an ALTER TABLE statement: ADD, DROP or RENAME a column, ADD a unique constraint, RENAME the table
+fn apply_alter_action(table: &mut Table, action: &str) {
+    let (keyword, rest) = first_word(action);
+    match keyword.to_ascii_uppercase().as_str() {
+        "ADD" => {
+            let definition = skip_keywords(rest, &["COLUMN", "IF NOT EXISTS"]);
+            let first = first_word(definition).0.to_ascii_uppercase();
+            if TABLE_CONSTRAINTS.contains(&first.as_str()) {
+                if let Some(key) = unique_key(definition) {
+                    for c in table.columns.iter_mut().filter(|c| c.name == key) {
+                        c.unique = true;
+                    }
+                }
+            } else {
+                for column in parse_columns(definition) {
+                    if !table.columns.iter().any(|c| c.name == column.name) {
+                        table.columns.push(column);
+                    }
+                }
+            }
+        }
+        "DROP" => {
+            let (name, _) = first_word(skip_keywords(rest, &["COLUMN", "IF EXISTS"]));
+            if !TABLE_CONSTRAINTS.contains(&name.to_ascii_uppercase().as_str()) {
+                let name = sql_name(name);
+                table.columns.retain(|c| c.name != name);
+            }
+        }
+        "RENAME" => {
+            let (word, after) = first_word(rest);
+            match word.to_ascii_uppercase().as_str() {
+                "TO" | "AS" => table.name = sql_name(first_word(after).0),
+                "INDEX" | "KEY" | "CONSTRAINT" => {}
+                _ => {
+                    let (from, after) = first_word(skip_keywords(rest, &["COLUMN"]));
+                    let (to, _) = first_word(skip_keywords(after, &["TO"]));
+                    let (from, to) = (sql_name(from), sql_name(to));
+                    for c in table.columns.iter_mut().filter(|c| c.name == from) {
+                        c.name = to.clone();
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 // Database of a connection url, from its scheme
@@ -1355,33 +1551,185 @@ fn sqlx_fetch_all(var: &str, result: &str, sql: &str, binds: &[String]) -> Strin
 
 // Fails with the fields whose type has no column type in the `dialect` database
 fn render_migration(name: &str, fields: &[Field], timestamps: bool, dialect: Dialect) -> Result<String, String> {
+    let table = name.to_lowercase();
     let mut columns = vec![dialect.id_column().to_string()];
-    let mut unmapped = Vec::new();
-    for field in fields {
-        match dialect.sql_column_type(&field.ty).map(|(sql, not_null)| (dialect.with_length(sql, field.length), not_null)) {
-            Some((sql, true)) => columns.push(format!("{} {} NOT NULL", field.name, sql)),
-            Some((sql, false)) => columns.push(format!("{} {}", field.name, sql)),
-            None => unmapped.push(format!("{}: {}", field.name, field.ty)),
-        }
-    }
-    if !unmapped.is_empty() {
-        return Err(format!("no {} column type for {}", dialect.name(), unmapped.join(", ")));
-    }
+    columns.extend(column_definitions(fields, dialect)?);
     if timestamps {
         // nullable, as their Option<DateTime<Utc>> fields
         let sql = dialect.sql_type("DateTime<Utc>").unwrap_or_default();
         columns.extend(TIMESTAMP_COLUMNS.map(|c| format!("{} {}", c, sql)));
     }
-    // table constraints, the inline REFERENCES are ignored by MySQL
+    // table constraints, the inline REFERENCES are ignored by MySQL,
+    // the foreign keys are named so that MySQL can drop them
     columns.extend(fields.iter().filter(|f| f.unique).map(|f| format!("UNIQUE ({})", f.name)));
     columns.extend(fields.iter().filter_map(|f| {
-        f.references.as_ref().map(|r| format!("FOREIGN KEY ({}) REFERENCES {} ({})", f.name, r.table, r.column))
+        f.references.as_ref().map(|r| format!("CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})", foreign_key_name(&table, &f.name), f.name, r.table, r.column))
     }));
     Ok(format!(
         "CREATE TABLE IF NOT EXISTS {} (\n    {}\n);\n",
-        name.to_lowercase(),
+        table,
         columns.join(",\n    ")
     ))
+}
+
+// `name TYPE [NOT NULL]`, the column of a field, None when its type has no column type in the `dialect` database
+fn column_definition(field: &Field, dialect: Dialect) -> Option<String> {
+    dialect.sql_column_type(&field.ty).map(|(sql, not_null)| {
+        let sql = dialect.with_length(sql, field.length);
+        if not_null { format!("{} {} NOT NULL", field.name, sql) } else { format!("{} {}", field.name, sql) }
+    })
+}
+
+// The columns of the fields, fails with the fields whose type has no column type in the `dialect` database
+fn column_definitions(fields: &[Field], dialect: Dialect) -> Result<Vec<String>, String> {
+    let unmapped: Vec<String> = fields
+        .iter()
+        .filter(|f| column_definition(f, dialect).is_none())
+        .map(|f| format!("{}: {}", f.name, f.ty))
+        .collect();
+    if !unmapped.is_empty() {
+        return Err(format!("no {} column type for {}", dialect.name(), unmapped.join(", ")));
+    }
+    Ok(fields.iter().filter_map(|f| column_definition(f, dialect)).collect())
+}
+
+fn foreign_key_name(table: &str, column: &str) -> String {
+    format!("fk_{}_{}", table, column)
+}
+
+// Name of the unique index of a column, the one PostgreSQL gives to a UNIQUE constraint
+fn unique_index_name(table: &str, column: &str) -> String {
+    format!("{}_{}_key", table, column)
+}
+
+// Migration adding the columns of `fields` to `table`, the columns `defaults` sets on the existing rows are given
+// by the field name, the unique columns get a unique index and the foreign keys a named constraint,
+// declared inline by SQLite, which cannot add a constraint to a table
+fn render_add_columns(table: &str, fields: &[Field], defaults: &[(String, String)], dialect: Dialect) -> Result<String, String> {
+    let columns = column_definitions(fields, dialect)?;
+    let mut sql = String::new();
+    for (field, column) in fields.iter().zip(columns) {
+        sql += &format!("ALTER TABLE {} ADD COLUMN {}", table, column);
+        if let Some((_, default)) = defaults.iter().find(|(name, _)| *name == field.name) {
+            sql += &format!(" DEFAULT {}", default);
+        }
+        if let (Some(r), Dialect::Sqlite) = (&field.references, dialect) {
+            sql += &format!(" REFERENCES {} ({})", r.table, r.column);
+        }
+        sql += ";\n";
+    }
+    // SQLite refuses ADD COLUMN ... UNIQUE
+    for field in fields.iter().filter(|f| f.unique) {
+        sql += &format!("CREATE UNIQUE INDEX {} ON {} ({});\n", unique_index_name(table, &field.name), table, field.name);
+    }
+    if dialect != Dialect::Sqlite {
+        for field in fields {
+            if let Some(r) = &field.references {
+                sql += &format!(
+                    "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({});\n",
+                    table, foreign_key_name(table, &field.name), field.name, r.table, r.column
+                );
+            }
+        }
+    }
+    Ok(sql)
+}
+
+fn is_nullable(ty: &str) -> bool {
+    ty.trim_start().starts_with("Option<")
+}
+
+// Why the database refuses to add the column of `field` with the `default`, SQLite adds a NOT NULL column
+// only with a default, a foreign key only with a NULL default, and no default that is not a constant
+fn add_column_error(field: &Field, default: Option<&str>, dialect: Dialect) -> Option<String> {
+    let default = default.map(str::trim).filter(|d| !d.eq_ignore_ascii_case("NULL"));
+    if dialect != Dialect::Sqlite {
+        return None;
+    }
+    if let Some(d) = default {
+        let upper = d.to_ascii_uppercase();
+        if d.starts_with('(') || ["CURRENT_TIME", "CURRENT_DATE", "CURRENT_TIMESTAMP"].iter().any(|f| upper.contains(f)) {
+            return Some(format!("SQLite adds a column only with a constant default, not `{}`", d));
+        }
+        if field.references.is_some() {
+            return Some(format!("SQLite adds the foreign key `{}` only with a NULL default, make it optional", field.name));
+        }
+    }
+    if default.is_none() && !is_nullable(&field.ty) {
+        return Some(format!("SQLite adds the NOT NULL column `{}` only with a default", field.name));
+    }
+    None
+}
+
+// Default proposed for the existing rows of a non-optional column of type `ty`, None when there is none to propose
+fn suggested_default(ty: &str, dialect: Dialect) -> Option<&'static str> {
+    let ty: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+    let ty = ty.trim_start_matches("chrono::");
+    let default = match (ty, dialect) {
+        ("String", _) => "''",
+        ("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64", _) => "0",
+        ("bool", _) => "FALSE",
+        ("DateTime<Utc>" | "NaiveDateTime", Dialect::Sqlite) => "'1970-01-01 00:00:00'",
+        ("DateTime<Utc>" | "NaiveDateTime", Dialect::Postgres) => "CURRENT_TIMESTAMP",
+        // the fractional seconds of DATETIME(6)
+        ("DateTime<Utc>" | "NaiveDateTime", Dialect::Mysql) => "CURRENT_TIMESTAMP(6)",
+        ("NaiveDate", Dialect::Sqlite) => "'1970-01-01'",
+        ("NaiveDate", Dialect::Postgres) => "CURRENT_DATE",
+        // an expression default, MySQL 8.0.13 and later
+        ("NaiveDate", Dialect::Mysql) => "(CURRENT_DATE)",
+        ("NaiveTime", _) => "'00:00:00'",
+        ("Vec<u8>", Dialect::Sqlite) => "X''",
+        ("Vec<u8>", Dialect::Postgres) => "''",
+        // no literal default for a BLOB
+        ("Vec<u8>", Dialect::Mysql) => "('')",
+        (ty, Dialect::Postgres) if ty.starts_with("Vec<") => "'{}'",
+        _ => return None,
+    };
+    Some(default)
+}
+
+// The default of the column of `field` for the existing rows, `flag` (--default) when set, None for an optional field,
+// asked otherwise, `?` making the field optional instead, which a SQLite foreign key must be
+fn read_default<R: BufRead, W: Write>(input: &mut R, output: &mut W, field: &mut Field, flag: Option<&str>, dialect: Dialect) -> Result<Option<String>, Error> {
+    if let Some(default) = flag {
+        return Ok(Some(default.to_string()));
+    }
+    if is_nullable(&field.ty) {
+        return Ok(None);
+    }
+    if dialect == Dialect::Sqlite && field.references.is_some() {
+        field.ty = format!("Option<{}>", field.ty);
+        writeln!(output, "{}", warning(&format!("SQLite adds a foreign key column only when it is nullable, `{}` is now {}", field.name, field.ty)))?;
+        return Ok(None);
+    }
+    let suggested = suggested_default(&field.ty, dialect);
+    loop {
+        let message = format!(
+            "{} {} {}{} ",
+            cyan("?"),
+            bold(&format!("Default of {} for the existing rows ›", cyan(&format!("`{}`", field.name)))),
+            dim("(SQL value, `?` makes the field optional)"),
+            suggested.map_or(String::new(), |d| dim(&format!(" [{}]", d)))
+        );
+        let answer = prompt(input, output, &message)?.unwrap_or_default();
+        if answer == "?" {
+            field.ty = format!("Option<{}>", field.ty);
+            writeln!(output, "  {} {}", green("✔"), field_line(field, 0))?;
+            return Ok(None);
+        }
+        let default = match (answer.is_empty(), suggested) {
+            (false, _) => answer,
+            (true, Some(suggested)) => suggested.to_string(),
+            (true, None) => {
+                writeln!(output, "{}", failure(&format!("`{}` has no default to propose, enter one or `?`", field.ty)))?;
+                continue;
+            }
+        };
+        match add_column_error(field, Some(&default), dialect) {
+            Some(error) => writeln!(output, "{}", failure(&error))?,
+            None => return Ok(Some(default)),
+        }
+    }
 }
 
 // Octopus drawn at the top of every generated file
@@ -1529,20 +1877,23 @@ fn migrations_dir(cwd: &Path) -> PathBuf {
     PathBuf::from("migrations")
 }
 
-// chrono import needed by the timestamps and the date fields, empty when none is used
-fn chrono_imports(fields: &[Field], timestamps: bool) -> String {
+// chrono types used by the timestamps and the date fields
+fn chrono_names(fields: &[Field], timestamps: bool) -> Vec<&'static str> {
     // whole type names, `NaiveDateTime` must not import `DateTime`
     let uses = |name: &str| {
         fields
             .iter()
             .any(|f| f.ty.split(|c: char| !c.is_ascii_alphanumeric() && c != '_').any(|t| t == name))
     };
-    let mut names = Vec::new();
-    for name in ["DateTime", "NaiveDate", "NaiveDateTime", "NaiveTime", "Utc"] {
-        if uses(name) || (timestamps && (name == "DateTime" || name == "Utc")) {
-            names.push(name);
-        }
-    }
+    ["DateTime", "NaiveDate", "NaiveDateTime", "NaiveTime", "Utc"]
+        .into_iter()
+        .filter(|name| uses(name) || (timestamps && (*name == "DateTime" || *name == "Utc")))
+        .collect()
+}
+
+// chrono import needed by the timestamps and the date fields, empty when none is used
+fn chrono_imports(fields: &[Field], timestamps: bool) -> String {
+    let names = chrono_names(fields, timestamps);
     if names.is_empty() {
         String::new()
     } else {
@@ -2162,6 +2513,234 @@ fn add_graphql_roots(root: &Path, module: &str, entity: &str) -> Result<(), Erro
     Ok(())
 }
 
+// The structs of a model the fields are added to: `Book`, `NewBook` and `UpdatableBook`
+fn model_struct_names(model: &str) -> [String; 3] {
+    [model.to_string(), format!("New{}", model), format!("Updatable{}", model)]
+}
+
+// The structs of the model in a parsed model file, in the order of `model_struct_names`
+fn model_structs<'a>(file: &'a syn::File, model: &str) -> Result<Vec<(&'a syn::ItemStruct, &'a syn::FieldsNamed)>, String> {
+    model_struct_names(model)
+        .iter()
+        .map(|name| {
+            let item = file.items.iter().find_map(|item| match item {
+                syn::Item::Struct(s) if s.ident == name => Some(s),
+                _ => None,
+            });
+            match item.map(|s| (s, &s.fields)) {
+                Some((s, syn::Fields::Named(fields))) => Ok((s, fields)),
+                Some(_) => Err(format!("`{}` is not a struct with named fields", name)),
+                None => Err(format!("no `{}` struct", name)),
+            }
+        })
+        .collect()
+}
+
+// The parsed model file `source`, or why it is not a model generated by octopux
+fn parse_model_file(source: &str) -> Result<syn::File, String> {
+    if !source.starts_with(generated_header("//").trim_end()) {
+        return Err("it was not generated by octopux".to_string());
+    }
+    syn::parse_file(source).map_err(|e| format!("it does not parse ({})", e))
+}
+
+// What `add-field` reads in a model file
+#[derive(Debug, PartialEq)]
+struct ModelFile {
+    // the fields of the model structs, the timestamps included
+    fields: Vec<String>,
+    // the model has `created_at`, `updated_at` and `deleted_at`
+    timestamps: bool,
+    // the model derives SqlxModel, whose queries take the new columns, the hand-written ones have to be updated
+    sqlx: bool,
+}
+
+fn read_model_file(source: &str, model: &str) -> Result<ModelFile, String> {
+    let file = parse_model_file(source)?;
+    let structs = model_structs(&file, model)?;
+    let mut fields: Vec<String> = Vec::new();
+    for (_, named) in &structs {
+        for ident in named.named.iter().filter_map(|f| f.ident.as_ref()) {
+            let name = syn::ext::IdentExt::unraw(ident).to_string();
+            if !fields.contains(&name) {
+                fields.push(name);
+            }
+        }
+    }
+    let timestamps = TIMESTAMP_COLUMNS.iter().all(|c| fields.iter().any(|f| f == c));
+    let sqlx = structs[0].0.attrs.iter().any(|attr| source[attr.span().byte_range()].contains("SqlxModel"));
+    Ok(ModelFile { fields, timestamps, sqlx })
+}
+
+// The start of the line of `pos` and the indentation before `pos`, None when `pos` is not the first thing on its line
+fn line_indent(source: &str, pos: usize) -> (usize, Option<&str>) {
+    let start = source[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let prefix = &source[start..pos];
+    (start, prefix.trim().is_empty().then_some(prefix))
+}
+
+// `source` with `fields` inserted in the model, creatable and updatable structs of `model`, before their timestamps,
+// and the chrono types of the fields imported, as text so that the code and the comments of the file are kept
+fn with_added_fields(source: &str, model: &str, fields: &[Field]) -> Result<String, String> {
+    let file = parse_model_file(source)?;
+    let mut edits: Vec<(usize, String)> = Vec::new();
+    for (_, named) in model_structs(&file, model)? {
+        let declaration = |indent: &str| fields.iter().map(|f| format!("{}pub {}: {},\n", indent, field_ident(&f.name), f.ty)).collect::<String>();
+        let inline = || fields.iter().map(|f| format!("pub {}: {}, ", field_ident(&f.name), f.ty)).collect::<String>();
+        let timestamp = named.named.iter().find(|f| f.ident.as_ref().is_some_and(|i| TIMESTAMP_COLUMNS.iter().any(|c| i == c)));
+        match timestamp {
+            Some(field) => {
+                let pos = field.span().byte_range().start;
+                match line_indent(source, pos) {
+                    (start, Some(indent)) => edits.push((start, declaration(indent))),
+                    (_, None) => edits.push((pos, inline())),
+                }
+            }
+            None => {
+                let close = named.brace_token.span.close().byte_range().start;
+                if let Some(last) = named.named.last().filter(|_| !named.named.trailing_punct()) {
+                    edits.push((last.span().byte_range().end, ",".to_string()));
+                }
+                match line_indent(source, close) {
+                    (start, Some(indent)) => {
+                        // the indentation of the last field, one level deeper than the brace without fields
+                        let indent = match named.named.last().map(|f| line_indent(source, f.span().byte_range().start).1) {
+                            Some(Some(field_indent)) => field_indent.to_string(),
+                            _ => format!("{}    ", indent),
+                        };
+                        edits.push((start, declaration(&indent)));
+                    }
+                    (_, None) => edits.push((close, format!(" {}", inline()))),
+                }
+            }
+        }
+    }
+    edits.extend(chrono_import_edit(source, &file, fields));
+    // from the end, so that the offsets of the other edits stay valid
+    edits.sort_by_key(|(pos, _)| std::cmp::Reverse(*pos));
+    let mut patched = source.to_string();
+    for (pos, text) in edits {
+        patched.insert_str(pos, &text);
+    }
+    Ok(patched)
+}
+
+// The chrono names a use tree imports (`*` for a glob), and the braces of its `chrono::{...}` group
+fn chrono_uses<'a>(tree: &'a syn::UseTree, in_chrono: bool, names: &mut Vec<String>, group: &mut Option<&'a syn::UseGroup>) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            let chrono = !in_chrono && path.ident == "chrono";
+            if let (true, syn::UseTree::Group(g)) = (chrono, path.tree.as_ref()) {
+                *group = Some(g);
+            }
+            chrono_uses(&path.tree, in_chrono || chrono, names, group);
+        }
+        syn::UseTree::Name(name) if in_chrono => names.push(name.ident.to_string()),
+        syn::UseTree::Rename(rename) if in_chrono => names.push(rename.rename.to_string()),
+        syn::UseTree::Glob(_) if in_chrono => names.push("*".to_string()),
+        syn::UseTree::Group(g) => g.items.iter().for_each(|t| chrono_uses(t, in_chrono, names, group)),
+        _ => {}
+    }
+}
+
+// The edit importing the chrono types of `fields` the file does not import yet, added to its `use chrono::{...};`,
+// or in a new one after the last `use`
+fn chrono_import_edit(source: &str, file: &syn::File, fields: &[Field]) -> Option<(usize, String)> {
+    let uses: Vec<&syn::ItemUse> = file.items.iter().filter_map(|item| match item {
+        syn::Item::Use(u) => Some(u),
+        _ => None,
+    }).collect();
+    let (mut imported, mut group) = (Vec::new(), None);
+    for item in &uses {
+        chrono_uses(&item.tree, false, &mut imported, &mut group);
+    }
+    let missing: Vec<&str> = chrono_names(fields, false).into_iter().filter(|n| !imported.iter().any(|i| i == n || i == "*")).collect();
+    if missing.is_empty() {
+        return None;
+    }
+    match (group, uses.last()) {
+        (Some(group), _) => {
+            let separator = if group.items.is_empty() || group.items.trailing_punct() { "" } else { ", " };
+            Some((group.brace_token.span.close().byte_range().start, format!("{}{}", separator, missing.join(", "))))
+        }
+        (None, Some(last)) => {
+            let indent = line_indent(source, last.span().byte_range().start).1.unwrap_or_default();
+            Some((last.semi_token.span().byte_range().end, format!("\n{}use chrono::{{{}}};", indent, missing.join(", "))))
+        }
+        (None, None) => {
+            let first = file.items.first()?.span().byte_range().start;
+            let (start, indent) = line_indent(source, first);
+            Some((start, format!("{}use chrono::{{{}}};\n", indent.unwrap_or_default(), missing.join(", "))))
+        }
+    }
+}
+
+// Adds fields to an existing model and, with --migration, writes the migration adding their columns
+#[allow(clippy::too_many_arguments)]
+fn add_fields<R: BufRead, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    model: &str,
+    table: &str,
+    path: &str,
+    migration: bool,
+    tables: Option<&[Table]>,
+    unique: bool,
+    default: Option<&str>,
+    dialect: Dialect,
+) -> Result<(), Error> {
+    let fail = |message: String| -> ! {
+        eprintln!("{}", failure(&message));
+        process::exit(1);
+    };
+    let source = fs::read_to_string(path).unwrap_or_else(|e| fail(format!("{} not read ({}), no field added", path, e)));
+    let declared = read_model_file(&source, model).unwrap_or_else(|e| fail(format!("{} is not a model of {}: {}, no field added", path, model, e)));
+    let strict = migration.then_some(dialect);
+    let references = tables.map(|t| (table, t));
+    let mut fields = read_new_fields(input, output, declared.timestamps, &declared.fields, strict, references, unique)?;
+    if fields.is_empty() {
+        fail(format!("No field entered, {} unchanged", path));
+    }
+    let mut defaults = Vec::new();
+    if migration {
+        for field in fields.iter_mut() {
+            if let Some(d) = read_default(input, output, field, default, dialect)? {
+                defaults.push((field.name.clone(), d));
+            }
+            let field_default = defaults.iter().find(|(n, _)| *n == field.name).map(|(_, d)| d.as_str());
+            if let Some(error) = add_column_error(field, field_default, dialect) {
+                fail(format!("{}, no field added", error));
+            }
+            if field.unique && field_default.is_some() {
+                writeln!(output, "{}", warning(&format!("The existing rows all get the default of `{}`, its unique index is refused when the table has several rows", field.name)))?;
+            }
+        }
+    }
+    let patched = with_added_fields(&source, model, &fields).unwrap_or_else(|e| fail(format!("{} not patched: {}", path, e)));
+    let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+    let migration = if migration {
+        let sql = render_add_columns(table, &fields, &defaults, dialect).unwrap_or_else(|e| fail(format!("{}, no field added", e)));
+        Some((migration_path(&format!("add_{}_to_{}", names.join("_"), table))?, sql))
+    } else {
+        None
+    };
+    let mut files = vec![(path.to_string(), true)];
+    files.extend(migration.iter().map(|(p, _)| (p.display().to_string(), false)));
+    if !confirm_save(input, output, &files)? {
+        fail(format!("Nothing saved, no field added to {}", model));
+    }
+    fs::write(path, patched)?;
+    let [_, new, updatable] = model_struct_names(model);
+    writeln!(output, "{}", success(&format!("Added {} to {}, {} and {} in {}", names.join(", "), model, new, updatable, path)))?;
+    if !declared.sqlx {
+        writeln!(output, "{}", warning(&format!("{} does not derive SqlxModel, add the columns to the queries of its model functions", model)))?;
+    }
+    if let Some((migration, sql)) = migration {
+        write_migration(&migration, &sql)?;
+    }
+    Ok(())
+}
+
 // Writes src/main.rs and src/helpers.rs under `root`, only if src/helpers.rs does not exist,
 // an existing src/main.rs (such as the one of `cargo init`) is only overwritten once confirmed
 fn bootstrap<R: BufRead, W: Write>(root: &Path, openapi: bool, graphql: bool, dialect: Dialect, input: &mut R, output: &mut W) -> Result<(), Error> {
@@ -2447,6 +3026,18 @@ fn run(opt: Opt) -> Result<(), Error> {
             }
             Ok(())
         }
+        Opt::AddField { model, migration, foreign_keys, unique, default, table, sqlite: _, postgres, mysql, output } => {
+            let dialect = Dialect::from_flags(postgres, mysql);
+            if let Some(invalid) = table.as_ref().filter(|t| !is_field_name(t)) {
+                eprintln!("{}", failure(&format!("`{}` is not a valid table name, use snake_case, no field added", invalid)));
+                process::exit(1);
+            }
+            let table = table.unwrap_or_else(|| to_snake_case(&model));
+            let path = source_path(&std::env::current_dir()?, output.as_deref(), &format!("{}.rs", table));
+            let tables = if foreign_keys { Some(known_tables(dialect)?) } else { None };
+            let mut input = io::stdin().lock();
+            add_fields(&mut input, &mut io::stdout(), &model, &table, &path, migration, tables.as_deref(), unique, default.as_deref(), dialect)
+        }
     }
 }
 
@@ -2456,6 +3047,7 @@ mod tests {
         migration_timestamp, migrations_dir, source_path, parse_field_type, pluralize, read_fields, render_migration, render_model, render_table_model, render_relation, render_relation_migration, to_camel_case,
         to_snake_case, bootstrap, bootstrap_dependencies, bootstrap_options, BootstrapOptions, render_bootstrap_main, changes_summary, confirm, confirm_save, generated_header, migration_tables, parse_tables, postgres_column_type, url_dialect,
         Cli, Column, Dialect, Field, Opt, Reference, Relation, Table, Through, LOGO,
+        add_column_error, read_default, read_model_file, read_new_fields, render_add_columns, with_added_fields, write_source, ModelFile,
     };
     use structopt::StructOpt;
 
@@ -2569,8 +3161,8 @@ CREATE INDEX book_idx ON book (code);
     created_at DATETIME(6),
     updated_at DATETIME(6),
     deleted_at DATETIME(6),
-    FOREIGN KEY (author_id) REFERENCES author (id),
-    FOREIGN KEY (parent_id) REFERENCES book (id)
+    CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERENCES author (id),
+    CONSTRAINT fk_book_parent_id FOREIGN KEY (parent_id) REFERENCES book (id)
 );
 ");
     }
@@ -2651,7 +3243,7 @@ CREATE INDEX book_idx ON book (code);
     author_id INT8 NOT NULL,
     UNIQUE (email),
     UNIQUE (author_id),
-    FOREIGN KEY (author_id) REFERENCES author (id)
+    CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERENCES author (id)
 );
 ");
     }
@@ -3652,5 +4244,182 @@ CREATE INDEX book_idx ON book (code);
         assert_eq!(relation.module(), "projects_categories");
         assert_eq!(render_relation_migration(&relation, Dialect::Sqlite), "CREATE INDEX IF NOT EXISTS project_category_project_id_idx ON project_category (project_id);\n");
         assert!(Opt::from_iter_safe(["octopux", "generate-relation", "--parent", "A", "--child", "B", "--sqlite", "--through-table", "ab"]).is_err());
+    }
+
+    #[test]
+    fn migration_tables_replay_the_altered_columns_and_the_unique_indexes() {
+        let dir = std::env::temp_dir().join(format!("octopux-migration-alters-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("1_create_book.sql"), "-- header; with a semicolon\nCREATE TABLE IF NOT EXISTS book (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, old TEXT);\nCREATE TABLE tmp (id INTEGER);").unwrap();
+        std::fs::write(dir.join("2_alter_book.sql"), "ALTER TABLE book ADD COLUMN isbn TEXT DEFAULT 'a;b';
+ALTER TABLE IF EXISTS book ADD COLUMN IF NOT EXISTS author_id INT8 NOT NULL REFERENCES author (id), DROP COLUMN old;
+alter table book rename column title to name;
+CREATE UNIQUE INDEX book_isbn_key ON book (isbn);
+ALTER TABLE book ADD CONSTRAINT book_author_key UNIQUE (author_id);
+ALTER TABLE book DROP CONSTRAINT fk_book_author_id;
+DROP TABLE IF EXISTS tmp;").unwrap();
+        assert_eq!(migration_tables(&dir), vec![Table {
+            name: "book".into(),
+            columns: vec![column("id", "INTEGER", true), column("name", "TEXT", false), column("isbn", "TEXT", true), column("author_id", "INT8", true)],
+        }]);
+        std::fs::write(dir.join("3_rename_book.sql"), "ALTER TABLE book RENAME TO books;").unwrap();
+        assert_eq!(migration_tables(&dir)[0].name, "books");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn add_columns_migration_declares_the_defaults_the_unique_indexes_and_the_foreign_keys() {
+        let fields = vec![
+            field("stars", "i32"),
+            Field { unique: true, length: Some(20), ..field("isbn", "Option<String>") },
+            Field { references: Some(Reference { table: "author".into(), column: "id".into() }), ..field("author_id", "Option<i64>") },
+        ];
+        let defaults = vec![("stars".to_string(), "0".to_string())];
+        assert_eq!(render_add_columns("book", &fields, &defaults, Dialect::Sqlite).unwrap(), "ALTER TABLE book ADD COLUMN stars INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE book ADD COLUMN isbn TEXT;
+ALTER TABLE book ADD COLUMN author_id INTEGER REFERENCES author (id);
+CREATE UNIQUE INDEX book_isbn_key ON book (isbn);
+");
+        assert_eq!(render_add_columns("book", &fields, &defaults, Dialect::Postgres).unwrap(), "ALTER TABLE book ADD COLUMN stars INT4 NOT NULL DEFAULT 0;
+ALTER TABLE book ADD COLUMN isbn VARCHAR(20);
+ALTER TABLE book ADD COLUMN author_id INT8;
+CREATE UNIQUE INDEX book_isbn_key ON book (isbn);
+ALTER TABLE book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERENCES author (id);
+");
+        assert_eq!(render_add_columns("book", &fields, &defaults, Dialect::Mysql).unwrap(), "ALTER TABLE book ADD COLUMN stars INT NOT NULL DEFAULT 0;
+ALTER TABLE book ADD COLUMN isbn VARCHAR(20);
+ALTER TABLE book ADD COLUMN author_id BIGINT;
+CREATE UNIQUE INDEX book_isbn_key ON book (isbn);
+ALTER TABLE book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERENCES author (id);
+");
+        assert!(render_add_columns("book", &[field("tags", "Vec<String>")], &[], Dialect::Sqlite).is_err());
+    }
+
+    #[test]
+    fn sqlite_refuses_the_columns_it_cannot_add() {
+        let author_id = Field { references: Some(Reference { table: "author".into(), column: "id".into() }), ..field("author_id", "i64") };
+        assert!(add_column_error(&field("stars", "i32"), None, Dialect::Sqlite).is_some());
+        assert!(add_column_error(&field("stars", "i32"), Some("NULL"), Dialect::Sqlite).is_some());
+        assert!(add_column_error(&field("stars", "i32"), Some("0"), Dialect::Sqlite).is_none());
+        assert!(add_column_error(&field("at", "DateTime<Utc>"), Some("CURRENT_TIMESTAMP"), Dialect::Sqlite).is_some());
+        assert!(add_column_error(&field("at", "NaiveDate"), Some("(date('now'))"), Dialect::Sqlite).is_some());
+        assert!(add_column_error(&author_id, Some("1"), Dialect::Sqlite).is_some());
+        assert!(add_column_error(&Field { ty: "Option<i64>".into(), ..author_id.clone() }, None, Dialect::Sqlite).is_none());
+        assert!(add_column_error(&field("stars", "i32"), None, Dialect::Postgres).is_none());
+        assert!(add_column_error(&field("at", "DateTime<Utc>"), Some("CURRENT_TIMESTAMP"), Dialect::Mysql).is_none());
+    }
+
+    #[test]
+    fn read_default_proposes_a_default_or_makes_the_field_optional() {
+        let read = |answers: &str, field: &mut Field, flag: Option<&str>, dialect: Dialect| {
+            let mut output = Vec::new();
+            let default = read_default(&mut answers.as_bytes(), &mut output, field, flag, dialect).unwrap();
+            (default, String::from_utf8(output).unwrap())
+        };
+        let mut stars = field("stars", "i32");
+        assert_eq!(read("\n", &mut stars, None, Dialect::Sqlite).0.as_deref(), Some("0"));
+        assert_eq!(read("5\n", &mut stars, None, Dialect::Postgres).0.as_deref(), Some("5"));
+        assert_eq!(read("", &mut stars, Some("'x'"), Dialect::Postgres).0.as_deref(), Some("'x'"));
+        // refused by SQLite, then asked again
+        let mut at = field("at", "DateTime<Utc>");
+        let (default, output) = read("CURRENT_TIMESTAMP\n\n", &mut at, None, Dialect::Sqlite);
+        assert_eq!(default.as_deref(), Some("'1970-01-01 00:00:00'"));
+        assert!(output.contains("constant default"));
+        assert_eq!(read("\n", &mut at, None, Dialect::Mysql).0.as_deref(), Some("CURRENT_TIMESTAMP(6)"));
+        assert_eq!(read("?\n", &mut at, None, Dialect::Postgres).0, None);
+        assert_eq!(at.ty, "Option<DateTime<Utc>>");
+        // optional fields are not asked
+        assert_eq!(read("", &mut at, None, Dialect::Postgres).0, None);
+        let mut author_id = Field { references: Some(Reference { table: "author".into(), column: "id".into() }), ..field("author_id", "i64") };
+        let (default, output) = read("", &mut author_id, None, Dialect::Sqlite);
+        assert_eq!((default, author_id.ty.as_str()), (None, "Option<i64>"));
+        assert!(output.contains("nullable"));
+    }
+
+    #[test]
+    fn read_new_fields_refuses_the_declared_fields() {
+        let mut output = Vec::new();
+        let declared = vec!["id".to_string(), "title".to_string()];
+        let fields = read_new_fields(&mut "title\nstars:i32\n\n".as_bytes(), &mut output, false, &declared, None, None, false).unwrap();
+        assert_eq!(fields, vec![field("stars", "i32")]);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Field `title` is already declared"));
+        assert!(output.contains("the model already declares id, title"));
+    }
+
+    // A model file of `fields`, as `generate-model` writes it
+    fn model_file(fields: &[Field], graphql: bool, sqlx: bool, timestamps: bool, dialect: Dialect) -> String {
+        super::with_header("//", &render_table_model("BookPage", Some("book_page"), false, graphql, sqlx, timestamps, fields, dialect))
+    }
+
+    #[test]
+    fn added_fields_are_inserted_in_the_model_structs_as_generate_model_declares_them() {
+        let title = Field { length: Some(80), ..field("title", "String") };
+        let added = [field("stars", "i32"), field("type", "Option<String>")];
+        for dialect in [Dialect::Sqlite, Dialect::Postgres, Dialect::Mysql] {
+            for (graphql, sqlx, timestamps) in [(false, false, false), (true, true, false), (false, true, true), (true, true, true)] {
+                let source = model_file(std::slice::from_ref(&title), graphql, sqlx, timestamps, dialect);
+                let all = [title.clone(), added[0].clone(), added[1].clone()];
+                assert_eq!(
+                    with_added_fields(&source, "BookPage", &added).unwrap(),
+                    model_file(&all, graphql, sqlx, timestamps, dialect),
+                    "graphql {} sqlx {} timestamps {} {:?}", graphql, sqlx, timestamps, dialect
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn added_fields_keep_the_code_written_in_the_model() {
+        let source = model_file(&[field("title", "String")], false, true, false, Dialect::Sqlite)
+            .replace("    pub struct NewBookPage {", "    // created by the form\n    pub struct NewBookPage {")
+            .replace("        pub title: String,\n    }\n\n    #[derive(Serialize", "        pub title: String // no comma\n    }\n\n    #[derive(Serialize")
+            + "\n    fn hand_written() -> u8 { 1 }\n";
+        let patched = with_added_fields(&source, "BookPage", &[field("stars", "i32")]).unwrap();
+        assert!(patched.contains("    // created by the form\n    pub struct NewBookPage {\n        pub title: String, // no comma\n        pub stars: i32,\n    }"));
+        assert!(patched.ends_with("\n    fn hand_written() -> u8 { 1 }\n"));
+        assert!(syn::parse_file(&patched).is_ok());
+    }
+
+    #[test]
+    fn added_fields_import_their_chrono_types() {
+        let published = [field("published", "NaiveDate")];
+        // added to the import of the timestamps
+        let source = model_file(&[field("title", "String")], false, true, true, Dialect::Postgres);
+        let patched = with_added_fields(&source, "BookPage", &published).unwrap();
+        assert!(patched.contains("    use chrono::{DateTime, Utc, NaiveDate};\n"));
+        // already imported
+        let source = model_file(&[field("at", "NaiveDate")], false, true, false, Dialect::Postgres);
+        assert_eq!(with_added_fields(&source, "BookPage", &published).unwrap().matches("NaiveDate}").count(), 1);
+        // in a new import after the last one
+        let source = model_file(&[field("title", "String")], false, true, false, Dialect::Postgres);
+        let patched = with_added_fields(&source, "BookPage", &published).unwrap();
+        assert!(patched.contains("    use octopux::gen_endpoint;\n    use chrono::{NaiveDate};\n"));
+        assert!(syn::parse_file(&patched).is_ok());
+    }
+
+    #[test]
+    fn model_file_gives_the_declared_fields_and_refuses_the_other_files() {
+        let source = model_file(&[field("title", "String")], false, true, true, Dialect::Sqlite);
+        assert_eq!(read_model_file(&source, "BookPage"), Ok(ModelFile {
+            fields: vec!["id".into(), "title".into(), "created_at".into(), "updated_at".into(), "deleted_at".into()],
+            timestamps: true,
+            sqlx: true,
+        }));
+        let source = model_file(&[field("type", "String")], false, false, false, Dialect::Sqlite);
+        assert_eq!(read_model_file(&source, "BookPage").map(|m| (m.fields, m.timestamps, m.sqlx)), Ok((vec!["id".into(), "type".into()], false, false)));
+        assert!(read_model_file(&source, "Book").unwrap_err().contains("no `Book` struct"));
+        assert!(read_model_file("pub struct BookPage {}", "BookPage").unwrap_err().contains("not generated by octopux"));
+        let _ = write_source;
+    }
+
+    #[test]
+    fn add_field_default_requires_migration() {
+        let parse = |flags: &[&str]| Opt::from_iter_safe(["octopux", "add-field", "--model", "Book", "--sqlite"].iter().chain(flags));
+        assert!(parse(&["--default", "0"]).is_err());
+        assert!(parse(&["--foreign-keys"]).is_err());
+        assert!(parse(&["--migration", "--default", "0", "--unique"]).is_ok());
+        assert!(Opt::from_iter_safe(["octopux", "add-field", "--model", "Book"]).is_err());
     }
 }

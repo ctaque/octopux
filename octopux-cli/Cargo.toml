@@ -20,6 +20,9 @@ chrono.workspace = true
 sqlx = { workspace = true, features = ["mysql"] }
 # Runs the queries listing the tables of DATABASE_URL, proposed to the foreign keys
 tokio = { version = "1", features = ["rt", "net", "time"] }
+# Finds the model structs `add-field` inserts the fields in, at their byte offsets in the file
+syn.workspace = true
+proc-macro2 = { workspace = true, features = ["span-locations"] }
 
 [[bin]]
 name = "octopux"

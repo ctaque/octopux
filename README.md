@@ -232,6 +232,7 @@ Files are written in `src` when it exists, in the working directory otherwise.
 | `octopux --bootstrap [--sqlite\|--postgres\|--mysql] [--openapi] [--graphql]` | Write `src/main.rs` and `src/helpers.rs`, and offer to install the dependencies, asking for the options not given without a database flag |
 | `octopux generate-model --name Project --sqlite\|--postgres\|--mysql [OPTIONS]` | Write `project.rs` (and its migration) |
 | `octopux generate-relation --parent Project --child Book --sqlite\|--postgres\|--mysql [OPTIONS]` | Write `project_books.rs`, the `books` of a project |
+| `octopux add-field --model Project --sqlite\|--postgres\|--mysql [OPTIONS]` | Add fields to `project.rs` (and the migration adding their columns), keeping the code written in it |
 
 ### generate-model
 
@@ -279,6 +280,29 @@ octopux generate-relation --parent Project --child Category --through ProjectCat
 ```
 
 Declare the file with `mod project_books;` and mount it with `.configure(project_books::configure)`.
+
+### add-field
+
+Asks for fields, as `generate-model --fields`, and inserts them in the `Project`, `NewProject` and `UpdatableProject` structs of `project.rs`, before the timestamps. The rest of the file is left as is, unlike `generate-model --force`. The sqlx derives, GraphQL and OpenAPI take the new fields from the structs.
+
+| Option | Description |
+| --- | --- |
+| `--model` | The model, `Project` |
+| `--migration` | Create the `ALTER TABLE ... ADD COLUMN` migration |
+| `--foreign-keys`, `--unique` | As for `generate-model` |
+| `--default` | The SQL default of the new non-optional columns on the existing rows (`--default "'none'"`), asked for each of them otherwise |
+| `--sqlite`, `--postgres`, `--mysql` | **Required.** The target database |
+| `--output` | The folder of the file |
+
+A non-optional column needs a default for the rows already in the table, enter `?` instead to make the field optional. SQLite only adds a foreign key column when it is nullable, and only with a constant default (no `CURRENT_TIMESTAMP`).
+
+```
+$ octopux add-field --model Project --migration --sqlite
+? Field 1 name › stars:i32
+  ✔ stars: i32
+? Field 2 name ›
+? Default of `stars` for the existing rows › (SQL value, `?` makes the field optional) [0]
+```
 
 ## Reverse engineering a database
 
