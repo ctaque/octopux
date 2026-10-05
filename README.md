@@ -81,11 +81,11 @@ Add `chrono --features serde` when a model has date fields or uses `--timestamps
 
 ```bash
 cargo init my-api && cd my-api
-octopux --bootstrap --sqlite --openapi
+octopux --bootstrap
 octopux generate-model --name Project --fields --sqlx --migration --timestamps --openapi --sqlite
 ```
 
-1. `--bootstrap` writes `src/main.rs` (an actix server on `127.0.0.1:8085`, a SQLite pool on `data.db`) and `src/helpers.rs` (the `AppState` holding the pool).
+1. `--bootstrap` asks for the database, OpenAPI and GraphQL (`octopux --bootstrap --sqlite --openapi` answers them with flags), then writes `src/main.rs` (an actix server on `127.0.0.1:8085`, a SQLite pool on `data.db`) and `src/helpers.rs` (the `AppState` holding the pool).
 2. `generate-model` asks for the fields, then writes `src/project.rs` and the migration creating the `project` table.
 3. In `src/main.rs`, declare the model with `mod project;`, mount it with `.configure(project::configure)` in the `v1` scope, and uncomment `sqlx::migrate!().run(&pool)`.
 
@@ -229,7 +229,7 @@ Files are written in `src` when it exists, in the working directory otherwise.
 
 | Command | Does |
 | --- | --- |
-| `octopux --bootstrap --sqlite\|--postgres\|--mysql [--openapi] [--graphql]` | Write `src/main.rs` and `src/helpers.rs`, and offer to install the dependencies |
+| `octopux --bootstrap [--sqlite\|--postgres\|--mysql] [--openapi] [--graphql]` | Write `src/main.rs` and `src/helpers.rs`, and offer to install the dependencies, asking for the options not given without a database flag |
 | `octopux generate-model --name Project --sqlite\|--postgres\|--mysql [OPTIONS]` | Write `project.rs` (and its migration) |
 | `octopux generate-relation --parent Project --child Book --sqlite\|--postgres\|--mysql [OPTIONS]` | Write `project_books.rs`, the `books` of a project |
 

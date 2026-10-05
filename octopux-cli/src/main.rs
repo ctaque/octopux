@@ -58,9 +58,9 @@ fn warning(message: &str) -> String {
 #[structopt(name = "octopux", group = ArgGroup::with_name("database"))]
 pub struct Cli {
     /// Generates src/main.rs and src/helpers.rs of an actix server, if src/helpers.rs does not exist,
-    /// prompting before overwriting an existing src/main.rs, then prompts for adding their dependencies to Cargo.toml with `cargo add`
-    /// requires one of --sqlite, --postgres or --mysql
-    #[structopt(long = "bootstrap", requires = "database")]
+    /// prompting before overwriting an existing src/main.rs, then prompts for adding their dependencies to Cargo.toml with `cargo add`,
+    /// without --sqlite, --postgres or --mysql, asks for the database, OpenAPI and GraphQL interactively
+    #[structopt(long = "bootstrap")]
     bootstrap: bool,
     /// With --bootstrap, serves the routes on an apistos app documented with OpenAPI and Swagger UI,
     /// to mount models generated with --openapi, instead of a plain actix app
@@ -1235,6 +1235,15 @@ impl Dialect {
         }
     }
 
+    // The flag selecting the database on the command line
+    fn flag(self) -> &'static str {
+        match self {
+            Dialect::Sqlite => "--sqlite",
+            Dialect::Postgres => "--postgres",
+            Dialect::Mysql => "--mysql",
+        }
+    }
+
     fn name(self) -> &'static str {
         match self {
             Dialect::Sqlite => "SQLite",
@@ -2181,11 +2190,7 @@ fn bootstrap<R: BufRead, W: Write>(root: &Path, openapi: bool, graphql: bool, di
             "Successfully bootstrapped src/main.rs and src/helpers.rs, generate a model with `octopux generate-model --name <Model>{}{}{}`, then declare it with `mod <model>;` and mount it with `.configure(<model>::configure)` in the v1 scope of src/main.rs",
             if openapi { " --openapi" } else { "" },
             if graphql { " --graphql --fields" } else { "" },
-            match dialect {
-                Dialect::Sqlite => " --sqlite",
-                Dialect::Postgres => " --postgres",
-                Dialect::Mysql => " --mysql",
-            }
+            format!(" {}", dialect.flag())
         ))
     );
     if dialect != Dialect::Sqlite {
@@ -2232,6 +2237,63 @@ fn bootstrap_dependencies(openapi: bool, graphql: bool, dialect: Dialect) -> Vec
     deps.iter().map(|args| args.iter().map(|a| a.to_string()).collect()).collect()
 }
 
+// Options of --bootstrap: the database, --openapi and --graphql
+#[derive(Debug, PartialEq)]
+struct BootstrapOptions {
+    dialect: Dialect,
+    openapi: bool,
+    graphql: bool,
+}
+
+const DIALECTS: [Dialect; 3] = [Dialect::Sqlite, Dialect::Postgres, Dialect::Mysql];
+
+// With a database flag, the flags are taken as is so that --bootstrap stays scriptable,
+// otherwise asks for the database, then for OpenAPI and GraphQL unless their flag is given,
+// and prints the equivalent command
+fn bootstrap_options<R: BufRead, W: Write>(cli: &Cli, input: &mut R, output: &mut W) -> Result<BootstrapOptions, Error> {
+    if cli.sqlite || cli.postgres || cli.mysql {
+        return Ok(BootstrapOptions { dialect: Dialect::from_flags(cli.postgres, cli.mysql), openapi: cli.openapi, graphql: cli.graphql });
+    }
+    writeln!(output, "{}", bold("Bootstrap"))?;
+    let menu = DIALECTS
+        .iter()
+        .enumerate()
+        .map(|(i, dialect)| format!("{} {}", magenta(&format!("{})", i + 1)), dialect.name()))
+        .collect::<Vec<_>>()
+        .join("  ");
+    writeln!(output, "  {}", menu)?;
+    let dialect = loop {
+        let message = format!("{} {} {} ", cyan("?"), bold("Database ›"), dim(&format!("[{}]", DIALECTS[0].name())));
+        let answer = prompt(input, output, &message)?.unwrap_or_default();
+        let chosen = if answer.is_empty() {
+            Some(DIALECTS[0])
+        } else {
+            answer
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| DIALECTS.get(n.wrapping_sub(1)).copied())
+                .or_else(|| DIALECTS.iter().copied().find(|d| d.name().eq_ignore_ascii_case(&answer) || d.flag() == format!("--{}", answer.to_lowercase())))
+        };
+        match chosen {
+            Some(dialect) => break dialect,
+            None => writeln!(output, "{}", failure(&format!("`{}` is not a database, enter a number between 1 and {}", answer, DIALECTS.len())))?,
+        }
+    };
+    let openapi = cli.openapi || confirm(input, output, "Document the routes with OpenAPI and Swagger UI (apistos)?")?;
+    let graphql = cli.graphql || confirm(input, output, "Serve a GraphQL schema and GraphiQL on /graphql (async-graphql)?")?;
+    writeln!(
+        output,
+        "\n{}",
+        dim(&highlight(&format!(
+            "Next time, skip the questions with `octopux --bootstrap {}{}{}`",
+            dialect.flag(),
+            if openapi { " --openapi" } else { "" },
+            if graphql { " --graphql" } else { "" }
+        )))
+    )?;
+    Ok(BootstrapOptions { dialect, openapi, graphql })
+}
+
 // Only an explicit yes accepts, an empty answer or the end of the input refuses
 fn confirm<R: BufRead, W: Write>(input: &mut R, output: &mut W, message: &str) -> Result<bool, Error> {
     let answer = prompt(input, output, &format!("{} {} {} ", cyan("?"), bold(&highlight(message)), dim("(y/N)")))?;
@@ -2264,10 +2326,10 @@ fn main() -> Result<(), Error> {
     if cli.bootstrap {
         let root = std::env::current_dir()?;
         let mut input = io::stdin().lock();
-        let dialect = Dialect::from_flags(cli.postgres, cli.mysql);
-        bootstrap(&root, cli.openapi, cli.graphql, dialect, &mut input, &mut io::stdout())?;
+        let BootstrapOptions { dialect, openapi, graphql } = bootstrap_options(&cli, &mut input, &mut io::stdout())?;
+        bootstrap(&root, openapi, graphql, dialect, &mut input, &mut io::stdout())?;
         if confirm(&mut input, &mut io::stdout(), "Install the dependencies with `cargo add`?")? {
-            install_dependencies(&root, cli.openapi, cli.graphql, dialect)?;
+            install_dependencies(&root, openapi, graphql, dialect)?;
         }
     }
     match cli.cmd {
@@ -2393,7 +2455,7 @@ fn run(opt: Opt) -> Result<(), Error> {
 mod tests {
     use super::{
         migration_timestamp, migrations_dir, source_path, parse_field_type, pluralize, read_fields, render_migration, render_model, render_table_model, render_relation, render_relation_migration, to_camel_case,
-        to_snake_case, bootstrap, bootstrap_dependencies, render_bootstrap_main, changes_summary, confirm, confirm_save, generated_header, migration_tables, parse_tables, postgres_column_type, url_dialect,
+        to_snake_case, bootstrap, bootstrap_dependencies, bootstrap_options, BootstrapOptions, render_bootstrap_main, changes_summary, confirm, confirm_save, generated_header, migration_tables, parse_tables, postgres_column_type, url_dialect,
         Cli, Column, Dialect, Field, Opt, Reference, Relation, Table, Through, LOGO,
     };
     use structopt::StructOpt;
@@ -3510,13 +3572,32 @@ CREATE INDEX book_idx ON book (code);
     }
 
     #[test]
+    fn bootstrap_asks_the_options_without_a_database_flag() {
+        let ask = |args: &[&str], answers: &str| {
+            let cli = Cli::from_iter_safe(args).unwrap();
+            bootstrap_options(&cli, &mut answers.as_bytes(), &mut Vec::new()).unwrap()
+        };
+        let options = |dialect, openapi, graphql| BootstrapOptions { dialect, openapi, graphql };
+        assert_eq!(ask(&["octopux", "--bootstrap"], "2\ny\nn\n"), options(Dialect::Postgres, true, false));
+        // invalid answers are asked again, names and flags are accepted
+        assert_eq!(ask(&["octopux", "--bootstrap"], "9\nmysql\n\ny\n"), options(Dialect::Mysql, false, true));
+        assert_eq!(ask(&["octopux", "--bootstrap"], "--sqlite\n"), options(Dialect::Sqlite, false, false));
+        // the end of the input takes the defaults
+        assert_eq!(ask(&["octopux", "--bootstrap"], ""), options(Dialect::Sqlite, false, false));
+        // a given flag is not asked: only the GraphQL answer remains
+        assert_eq!(ask(&["octopux", "--bootstrap", "--openapi"], "3\ny\n"), options(Dialect::Mysql, true, true));
+        // a database flag skips every question
+        assert_eq!(ask(&["octopux", "--bootstrap", "--postgres", "--graphql"], "y\ny\n"), options(Dialect::Postgres, false, true));
+    }
+
+    #[test]
     fn bootstrap_database_flags_require_bootstrap_and_conflict() {
         let cli = Cli::from_iter_safe(&["octopux", "--bootstrap", "--postgres"]).unwrap();
         assert_eq!(Dialect::from_flags(cli.postgres, cli.mysql), Dialect::Postgres);
         assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--mysql"]).unwrap().mysql);
         assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--sqlite"]).unwrap().sqlite);
         assert!(Cli::from_iter_safe(&["octopux", "--postgres"]).is_err());
-        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap"]).is_err());
+        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap"]).is_ok());
         assert!(Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "A", "--child", "B"]).is_err());
         assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--postgres", "--mysql"]).is_err());
         assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--sqlite", "--postgres"]).is_err());
