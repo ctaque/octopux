@@ -1,5 +1,6 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use sqlx::TypeInfo;
+use structopt::clap::ArgGroup;
 use structopt::StructOpt;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write, Error};
@@ -54,11 +55,12 @@ fn warning(message: &str) -> String {
 }
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "octopux")]
+#[structopt(name = "octopux", group = ArgGroup::with_name("database"))]
 pub struct Cli {
     /// Generates src/main.rs and src/helpers.rs of an actix server, if src/helpers.rs does not exist,
     /// prompting before overwriting an existing src/main.rs, then prompts for adding their dependencies to Cargo.toml with `cargo add`
-    #[structopt(long = "bootstrap")]
+    /// requires one of --sqlite, --postgres or --mysql
+    #[structopt(long = "bootstrap", requires = "database")]
     bootstrap: bool,
     /// With --bootstrap, serves the routes on an apistos app documented with OpenAPI and Swagger UI,
     /// to mount models generated with --openapi, instead of a plain actix app
@@ -68,13 +70,23 @@ pub struct Cli {
     /// to merge the roots of the models generated with --graphql
     #[structopt(long = "graphql", requires = "bootstrap")]
     graphql: bool,
+    /// With --bootstrap, connects to a SQLite database in data.db
+    #[structopt(long = "sqlite", requires = "bootstrap", group = "database")]
+    sqlite: bool,
+    /// With --bootstrap, connects to the PostgreSQL database of DATABASE_URL
+    #[structopt(long = "postgres", requires = "bootstrap", group = "database")]
+    postgres: bool,
+    /// With --bootstrap, connects to the MySQL database of DATABASE_URL
+    #[structopt(long = "mysql", requires = "bootstrap", group = "database")]
+    mysql: bool,
     #[structopt(subcommand)]
     cmd: Option<Opt>,
 }
 
 #[derive(Debug, StructOpt)]
 pub enum Opt {
-    #[structopt(name = "generate-model")]
+    /// Generates a model, requires one of --sqlite, --postgres or --mysql
+    #[structopt(name = "generate-model", group = ArgGroup::with_name("database").required(true))]
     GenerateModel {
         #[structopt(short = "n", long = "name")]
         name: String,
@@ -107,14 +119,14 @@ pub enum Opt {
         /// The table of the sqlx queries and the migration, the snake_case model name by default (`book_page` for `BookPage`)
         #[structopt(long = "table", hidden = true)]
         table: Option<String>,
-        /// Targets SQLite with the sqlx queries and the migration (the default)
-        #[structopt(long = "sqlite", conflicts_with_all = &["postgres", "mysql"])]
+        /// Targets SQLite with the sqlx queries and the migration
+        #[structopt(long = "sqlite", group = "database")]
         sqlite: bool,
         /// Targets PostgreSQL with the sqlx queries and the migration
-        #[structopt(long = "postgres", conflicts_with = "mysql")]
+        #[structopt(long = "postgres", group = "database")]
         postgres: bool,
         /// Targets MySQL with the sqlx queries and the migration
-        #[structopt(long = "mysql")]
+        #[structopt(long = "mysql", group = "database")]
         mysql: bool,
         /// Adds `created_at`, `updated_at` and `deleted_at` columns to the model and the migration,
         /// with --sqlx, they are set by the queries, and `delete` becomes a soft delete setting `deleted_at`
@@ -127,8 +139,9 @@ pub enum Opt {
         #[structopt(long = "output", parse(from_os_str))]
         output: Option<PathBuf>,
     },
-    /// Generates a has-many relation, served on `GET /{parent}/{id}/{relation}` and paginated
-    #[structopt(name = "generate-relation")]
+    /// Generates a has-many relation, served on `GET /{parent}/{id}/{relation}` and paginated,
+    /// requires one of --sqlite, --postgres or --mysql
+    #[structopt(name = "generate-relation", group = ArgGroup::with_name("database").required(true))]
     GenerateRelation {
         /// The parent model, e.g. `Project`
         #[structopt(long = "parent")]
@@ -171,14 +184,14 @@ pub enum Opt {
         /// Creates the migration indexing the foreign key in the migrations folder next to src
         #[structopt(long = "migration")]
         migration: bool,
-        /// Targets SQLite with the sqlx queries and the migration (the default)
-        #[structopt(long = "sqlite", conflicts_with_all = &["postgres", "mysql"])]
+        /// Targets SQLite with the sqlx queries and the migration
+        #[structopt(long = "sqlite", group = "database")]
         sqlite: bool,
         /// Targets PostgreSQL with the sqlx queries and the migration
-        #[structopt(long = "postgres", conflicts_with = "mysql")]
+        #[structopt(long = "postgres", group = "database")]
         postgres: bool,
         /// Targets MySQL with the sqlx queries and the migration
-        #[structopt(long = "mysql")]
+        #[structopt(long = "mysql", group = "database")]
         mysql: bool,
         /// The models were generated with --timestamps: the soft deleted rows are skipped
         #[structopt(long = "timestamps")]
@@ -196,11 +209,11 @@ pub enum Opt {
 const BOOTSTRAP_MAIN: &str = r#"{graphql_attributes}mod helpers;
 use actix_web::web;
 use helpers::AppState;
-use sqlx::SqlitePool;{graphql_imports}
+use sqlx::{pool};{graphql_imports}
 {graphql_roots}
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let pool = SqlitePool::connect("sqlite://data.db?mode=rwc").await.unwrap();
+{pool_connect}
     // sqlx::migrate!().run(&pool).await.unwrap();
     let state = web::Data::new(AppState { pool });{graphql_schema}
 
@@ -228,11 +241,11 @@ use apistos::info::Info;
 use apistos::spec::Spec;
 use apistos::SwaggerUIConfig;
 use helpers::AppState;
-use sqlx::SqlitePool;{graphql_imports}
+use sqlx::{pool};{graphql_imports}
 {graphql_roots}
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let pool = SqlitePool::connect("sqlite://data.db?mode=rwc").await.unwrap();
+{pool_connect}
     // sqlx::migrate!().run(&pool).await.unwrap();
     let state = web::Data::new(AppState { pool });{graphql_schema}
 
@@ -265,6 +278,13 @@ async fn main() -> std::io::Result<()> {
     .await
 }
 "#;
+
+// The SQLite database is a file created next to the crate, the servers are reached through DATABASE_URL
+const BOOTSTRAP_SQLITE_CONNECT: &str = r#"    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+let pool = SqlitePool::connect(&database_url).await.unwrap();"#;
+
+const BOOTSTRAP_SERVER_CONNECT: &str = r#"    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let pool = {pool}::connect(&database_url).await.unwrap();"#;
 
 // MergedObject nests the roots it merges, those of a few dozen models overflow the default recursion limit
 const BOOTSTRAP_GRAPHQL_ATTRIBUTES: &str = "#![recursion_limit = \"512\"]\n\n";
@@ -316,27 +336,48 @@ const BOOTSTRAP_GRAPHQL_ROUTES: &str = r#"
                     .route(web::get().to(graphiql)),
             )"#;
 
-// src/main.rs of --bootstrap, on an apistos app with `openapi`, serving the GraphQL schema with `graphql`
-fn render_bootstrap_main(openapi: bool, graphql: bool) -> String {
+// sqlx pool of the `dialect` database, shared by src/main.rs and src/helpers.rs
+fn bootstrap_pool(dialect: Dialect) -> &'static str {
+    match dialect {
+        Dialect::Sqlite => "SqlitePool",
+        Dialect::Postgres => "PgPool",
+        Dialect::Mysql => "MySqlPool",
+    }
+}
+
+// src/main.rs of --bootstrap, on an apistos app with `openapi`, serving the GraphQL schema with `graphql`,
+// connected to the `dialect` database
+fn render_bootstrap_main(openapi: bool, graphql: bool, dialect: Dialect) -> String {
     let tpl = if openapi { BOOTSTRAP_OPENAPI_MAIN } else { BOOTSTRAP_MAIN };
+    let connect = match dialect {
+        Dialect::Sqlite => BOOTSTRAP_SQLITE_CONNECT,
+        Dialect::Postgres | Dialect::Mysql => BOOTSTRAP_SERVER_CONNECT,
+    };
     let [attributes, imports, roots, schema, routes] = if graphql {
         [BOOTSTRAP_GRAPHQL_ATTRIBUTES, BOOTSTRAP_GRAPHQL_IMPORTS, BOOTSTRAP_GRAPHQL_ROOTS, BOOTSTRAP_GRAPHQL_SCHEMA, BOOTSTRAP_GRAPHQL_ROUTES]
     } else {
         ["", "", "", "", ""]
     };
-    tpl.replace("{graphql_attributes}", attributes)
+    tpl.replace("{pool_connect}", connect)
+        .replace("{pool}", bootstrap_pool(dialect))
+        .replace("{graphql_attributes}", attributes)
         .replace("{graphql_imports}", imports)
         .replace("{graphql_roots}", roots)
         .replace("{graphql_schema}", schema)
         .replace("{graphql_routes}", routes)
 }
 
-const BOOTSTRAP_HELPERS: &str = r#"use sqlx::SqlitePool;
+const BOOTSTRAP_HELPERS: &str = r#"use sqlx::{pool};
 
 pub struct AppState {
-    pub pool: SqlitePool,
+    pub pool: {pool},
 }
 "#;
+
+// src/helpers.rs of --bootstrap, the state holding the pool of the `dialect` database
+fn render_bootstrap_helpers(dialect: Dialect) -> String {
+    BOOTSTRAP_HELPERS.replace("{pool}", bootstrap_pool(dialect))
+}
 
 const OPENAPI_IMPORTS: &str = r#"
     use apistos::ApiComponent;
@@ -1902,8 +1943,8 @@ const RELATION_GRAPHQL_RESOLVER: &str = r#"
 // Field of the relation in the `#[ComplexObject]` of the parent model
 const RELATION_GRAPHQL_FIELD: &str = r#"
         /// The {relation_name} of the {parent_lower_case}, paginated
-        async fn {relation_name}(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::{child_module}::{child}>> {
-            crate::{module}::resolve(ctx, self.id, offset, limit).await
+        async fn {relation_name}(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::{child_module}::{child}>> {
+            super::{module}::resolve(ctx, self.id, offset, limit).await
         }"#;
 
 fn relation_graphql_field(relation: &Relation) -> String {
@@ -1919,7 +1960,8 @@ fn relation_graphql_field(relation: &Relation) -> String {
 // unchanged when the field is already there, None without the marker (a model generated without --graphql)
 fn with_relation_field(source: &str, relation: &Relation) -> Option<String> {
     let at = source.find(GRAPHQL_RELATIONS_MARKER)? + GRAPHQL_RELATIONS_MARKER.len();
-    if source.contains(&format!("crate::{}::resolve(", relation.module())) {
+    // `crate::` in the models generated before the sibling modules were imported with `super::`
+    if ["super", "crate"].iter().any(|prefix| source.contains(&format!("{}::{}::resolve(", prefix, relation.module()))) {
         return Some(source.to_string());
     }
     Some(format!("{}{}{}", &source[..at], relation_graphql_field(relation), &source[at..]))
@@ -1955,7 +1997,7 @@ fn render_relation(relation: &Relation, openapi: bool, graphql: bool, sqlx: bool
     let child_import = if relation.child_table == relation.parent_table {
         String::new()
     } else {
-        format!("\n    use crate::{}::{};", relation.child_table, relation.child)
+        format!("\n    use super::{}::{};", relation.child_table, relation.child)
     };
     RELATION_TPL
         .replace("{child_import}", &child_import)
@@ -1988,7 +2030,8 @@ fn render_relation_migration(relation: &Relation, dialect: Dialect) -> String {
 const RELATION_TPL: &str = r#"
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::{parent_module}::{{parent}, Id};{child_import}
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::{parent_module}::{{parent}, Id};{child_import}
     use serde::Deserialize;
     use octopux::{
         HasMany,
@@ -2113,9 +2156,10 @@ fn add_graphql_roots(root: &Path, module: &str, entity: &str) -> Result<(), Erro
 
 // Writes src/main.rs and src/helpers.rs under `root`, only if src/helpers.rs does not exist,
 // an existing src/main.rs (such as the one of `cargo init`) is only overwritten once confirmed
-fn bootstrap<R: BufRead, W: Write>(root: &Path, openapi: bool, graphql: bool, input: &mut R, output: &mut W) -> Result<(), Error> {
-    let main_content = render_bootstrap_main(openapi, graphql);
-    let files = [("main.rs", main_content.as_str()), ("helpers.rs", BOOTSTRAP_HELPERS)];
+fn bootstrap<R: BufRead, W: Write>(root: &Path, openapi: bool, graphql: bool, dialect: Dialect, input: &mut R, output: &mut W) -> Result<(), Error> {
+    let main_content = render_bootstrap_main(openapi, graphql, dialect);
+    let helpers_content = render_bootstrap_helpers(dialect);
+    let files = [("main.rs", main_content.as_str()), ("helpers.rs", helpers_content.as_str())];
     let src = root.join("src");
     let helpers = src.join("helpers.rs");
     if helpers.exists() {
@@ -2134,11 +2178,19 @@ fn bootstrap<R: BufRead, W: Write>(root: &Path, openapi: bool, graphql: bool, in
     println!(
         "{}",
         success(&format!(
-            "Successfully bootstrapped src/main.rs and src/helpers.rs, generate a model with `octopux generate-model --name <Model>{}{}`, then declare it with `mod <model>;` and mount it with `.configure(<model>::configure)` in the v1 scope of src/main.rs",
+            "Successfully bootstrapped src/main.rs and src/helpers.rs, generate a model with `octopux generate-model --name <Model>{}{}{}`, then declare it with `mod <model>;` and mount it with `.configure(<model>::configure)` in the v1 scope of src/main.rs",
             if openapi { " --openapi" } else { "" },
-            if graphql { " --graphql --fields" } else { "" }
+            if graphql { " --graphql --fields" } else { "" },
+            match dialect {
+                Dialect::Sqlite => " --sqlite",
+                Dialect::Postgres => " --postgres",
+                Dialect::Mysql => " --mysql",
+            }
         ))
     );
+    if dialect != Dialect::Sqlite {
+        println!("{}", highlight(&format!("  src/main.rs connects to the {} database of `DATABASE_URL`", dialect.name())));
+    }
     if graphql {
         println!("{}", highlight("  Its `<Model>Query` and `<Model>Mutation` are merged into the `Query` and `Mutation` roots of src/main.rs, GraphiQL is served on GET /graphql"));
     }
@@ -2148,7 +2200,7 @@ fn bootstrap<R: BufRead, W: Write>(root: &Path, openapi: bool, graphql: bool, in
 // `cargo add` arguments of the dependencies of the bootstrapped files and of the generated models,
 // octopux is taken from the tag of the CLI version in its repository, so that the generated code matches its macros,
 // apistos and schemars are only added with --openapi, async-graphql and its actix integration with --graphql
-fn bootstrap_dependencies(openapi: bool, graphql: bool) -> Vec<Vec<String>> {
+fn bootstrap_dependencies(openapi: bool, graphql: bool, dialect: Dialect) -> Vec<Vec<String>> {
     let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
     let features = if openapi { "openapi,sqlx" } else { "sqlx" };
     let mut deps = vec![
@@ -2164,10 +2216,18 @@ fn bootstrap_dependencies(openapi: bool, graphql: bool) -> Vec<Vec<String>> {
         deps.push(vec!["async-graphql@7", "--features", "chrono"]);
         deps.push(vec!["async-graphql-actix-web@7"]);
     }
+    let sqlx_features = format!(
+        "runtime-tokio,{},chrono,macros,migrate",
+        match dialect {
+            Dialect::Sqlite => "sqlite",
+            Dialect::Postgres => "postgres",
+            Dialect::Mysql => "mysql",
+        }
+    );
     deps.extend([
         vec!["serde@1", "--features", "derive"],
         vec!["chrono@0.4", "--features", "serde"],
-        vec!["sqlx@0.9", "--no-default-features", "--features", "runtime-tokio,sqlite,chrono,macros,migrate"],
+        vec!["sqlx@0.9", "--no-default-features", "--features", sqlx_features.as_str()],
     ]);
     deps.iter().map(|args| args.iter().map(|a| a.to_string()).collect()).collect()
 }
@@ -2179,12 +2239,12 @@ fn confirm<R: BufRead, W: Write>(input: &mut R, output: &mut W, message: &str) -
 }
 
 // Runs `cargo add` in `root` for each dependency of the bootstrapped project
-fn install_dependencies(root: &Path, openapi: bool, graphql: bool) -> Result<(), Error> {
+fn install_dependencies(root: &Path, openapi: bool, graphql: bool, dialect: Dialect) -> Result<(), Error> {
     if !root.join("Cargo.toml").exists() {
         eprintln!("{}", failure(&format!("No Cargo.toml in {}, dependencies not installed, create the crate with `cargo init` first", root.display())));
         process::exit(1);
     }
-    for args in bootstrap_dependencies(openapi, graphql) {
+    for args in bootstrap_dependencies(openapi, graphql, dialect) {
         let status = process::Command::new("cargo").arg("add").args(&args).current_dir(root).status()?;
         if !status.success() {
             eprintln!("{}", failure(&format!("`cargo add {}` failed, remaining dependencies not installed", args.join(" "))));
@@ -2204,9 +2264,10 @@ fn main() -> Result<(), Error> {
     if cli.bootstrap {
         let root = std::env::current_dir()?;
         let mut input = io::stdin().lock();
-        bootstrap(&root, cli.openapi, cli.graphql, &mut input, &mut io::stdout())?;
+        let dialect = Dialect::from_flags(cli.postgres, cli.mysql);
+        bootstrap(&root, cli.openapi, cli.graphql, dialect, &mut input, &mut io::stdout())?;
         if confirm(&mut input, &mut io::stdout(), "Install the dependencies with `cargo add`?")? {
-            install_dependencies(&root, cli.openapi, cli.graphql)?;
+            install_dependencies(&root, cli.openapi, cli.graphql, dialect)?;
         }
     }
     match cli.cmd {
@@ -2456,7 +2517,7 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn foreign_keys_flag_requires_migration() {
         let parse = |flags: &[&str]| {
-            let mut args = vec!["octopux", "generate-model", "--name", "Book", "--fields"];
+            let mut args = vec!["octopux", "generate-model", "--name", "Book", "--sqlite", "--fields"];
             args.extend(flags);
             Opt::from_iter_safe(&args)
         };
@@ -2537,7 +2598,7 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn unique_flag_requires_migration() {
         let parse = |flags: &[&str]| {
-            let mut args = vec!["octopux", "generate-model", "--name", "Book", "--fields"];
+            let mut args = vec!["octopux", "generate-model", "--name", "Book", "--sqlite", "--fields"];
             args.extend(flags);
             Opt::from_iter_safe(&args)
         };
@@ -2720,8 +2781,8 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn sqlx_flag_requires_fields() {
-        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlx"]).is_err());
-        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlx", "--fields"]).is_ok());
+        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlite", "--sqlx"]).is_err());
+        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlite", "--sqlx", "--fields"]).is_ok());
     }
 
     #[test]
@@ -2744,8 +2805,8 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn graphql_requires_fields() {
-        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--graphql"]).is_err());
-        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--graphql", "--fields"]).is_ok());
+        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlite", "--graphql"]).is_err());
+        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlite", "--graphql", "--fields"]).is_ok());
     }
 
     #[test]
@@ -2819,8 +2880,8 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn migration_flag_requires_fields() {
-        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--migration"]).is_err());
-        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--migration", "--fields"]).is_ok());
+        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlite", "--migration"]).is_err());
+        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlite", "--migration", "--fields"]).is_ok());
     }
 
     #[test]
@@ -2963,6 +3024,8 @@ CREATE INDEX book_idx ON book (code);
             args.extend(flags);
             Opt::from_iter_safe(&args)
         };
+        assert!(parse(&[]).is_err());
+        assert!(parse(&["--sqlite"]).is_ok());
         assert!(parse(&["--postgres"]).is_ok());
         assert!(parse(&["--postgres", "--mysql"]).is_err());
         assert!(parse(&["--sqlite", "--postgres"]).is_err());
@@ -3085,7 +3148,7 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn relation_implements_has_many_on_its_own_type() {
         let rel = render_relation(&relation("Project", "Book", None), false, false, false, false, Dialect::Sqlite);
-        assert!(rel.contains("use crate::project::{Project, Id};\n    use crate::book::Book;"));
+        assert!(rel.contains("use super::project::{Project, Id};\n    use super::book::Book;"));
         assert!(rel.contains("pub struct ProjectBooksQuery {\n        /// Number of rows to skip\n        pub offset: Option<usize>,"));
         assert!(rel.contains("pub struct ProjectBooks;"));
         assert!(rel.contains("impl HasMany for ProjectBooks {\n        type Parent = Project;\n        type Id = Id;\n        type Query = ProjectBooksQuery;\n        type Result = Vec<Book>;\n        type State = AppState;\n        const RELATION: &'static str = \"books\";"));
@@ -3099,8 +3162,8 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn self_referencing_relation_imports_its_model_once() {
         let rel = render_relation(&relation("Category", "Category", None), false, false, false, false, Dialect::Sqlite);
-        assert!(rel.contains("use crate::category::{Category, Id};\n    use serde::Deserialize;"));
-        assert_eq!(rel.matches("use crate::category::").count(), 1);
+        assert!(rel.contains("use super::category::{Category, Id};\n    use serde::Deserialize;"));
+        assert_eq!(rel.matches("use super::category::").count(), 1);
     }
 
     #[test]
@@ -3146,7 +3209,7 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn child_key_requires_through() {
         let parse = |flags: &[&str]| {
-            let mut args = vec!["octopux", "generate-relation", "--parent", "Project", "--child", "Category"];
+            let mut args = vec!["octopux", "generate-relation", "--parent", "Project", "--child", "Category", "--sqlite"];
             args.extend(flags);
             Opt::from_iter_safe(&args)
         };
@@ -3158,21 +3221,21 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn force_is_accepted_by_the_generators() {
-        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--force"]).is_ok());
-        assert!(Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "Project", "--child", "Book", "--force"]).is_ok());
-        let opt = Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--output=src/models"]).unwrap();
+        assert!(Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlite", "--force"]).is_ok());
+        assert!(Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "Project", "--child", "Book", "--sqlite", "--force"]).is_ok());
+        let opt = Opt::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlite", "--output=src/models"]).unwrap();
         assert!(matches!(opt, Opt::GenerateModel { output: Some(ref o), .. } if o == std::path::Path::new("src/models")));
-        let opt = Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "Project", "--child", "Book", "--output", "/tmp/out"]).unwrap();
+        let opt = Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "Project", "--child", "Book", "--sqlite", "--output", "/tmp/out"]).unwrap();
         assert!(matches!(opt, Opt::GenerateRelation { output: Some(ref o), .. } if o == std::path::Path::new("/tmp/out")));
     }
 
     #[test]
     fn bootstrap_is_a_root_flag() {
-        let cli = Cli::from_iter_safe(&["octopux", "--bootstrap"]).unwrap();
+        let cli = Cli::from_iter_safe(&["octopux", "--bootstrap", "--sqlite"]).unwrap();
         assert!(cli.bootstrap && cli.cmd.is_none());
-        let cli = Cli::from_iter_safe(&["octopux", "generate-model", "--name", "Project"]).unwrap();
+        let cli = Cli::from_iter_safe(&["octopux", "generate-model", "--name", "Project", "--sqlite"]).unwrap();
         assert!(!cli.bootstrap && cli.cmd.is_some());
-        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--openapi"]).unwrap().openapi);
+        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--sqlite", "--openapi"]).unwrap().openapi);
         assert!(Cli::from_iter_safe(&["octopux", "--openapi"]).is_err());
     }
 
@@ -3180,7 +3243,7 @@ CREATE INDEX book_idx ON book (code);
     fn bootstrap_writes_main_and_helpers() {
         let root = std::env::temp_dir().join(format!("octopux-bootstrap-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        bootstrap(&root, false, false, &mut "".as_bytes(), &mut Vec::new()).unwrap();
+        bootstrap(&root, false, false, Dialect::Sqlite, &mut "".as_bytes(), &mut Vec::new()).unwrap();
         let main = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
         let helpers = std::fs::read_to_string(root.join("src/helpers.rs")).unwrap();
         assert!(main.starts_with(&(generated_header("//") + "mod helpers;\nuse ")));
@@ -3196,7 +3259,7 @@ CREATE INDEX book_idx ON book (code);
     fn openapi_bootstrap_writes_an_apistos_main() {
         let root = std::env::temp_dir().join(format!("octopux-bootstrap-openapi-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        bootstrap(&root, true, false, &mut "".as_bytes(), &mut Vec::new()).unwrap();
+        bootstrap(&root, true, false, Dialect::Sqlite, &mut "".as_bytes(), &mut Vec::new()).unwrap();
         let main = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
         let helpers = std::fs::read_to_string(root.join("src/helpers.rs")).unwrap();
         assert!(main.starts_with(&(generated_header("//") + "mod helpers;\nuse ")));
@@ -3214,7 +3277,7 @@ CREATE INDEX book_idx ON book (code);
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
         let mut output = Vec::new();
-        bootstrap(&root, false, false, &mut "y\n".as_bytes(), &mut output).unwrap();
+        bootstrap(&root, false, false, Dialect::Sqlite, &mut "y\n".as_bytes(), &mut output).unwrap();
         assert!(String::from_utf8(output).unwrap().contains("main.rs already exists, overwrite it with the generated one? (y/N) "));
         assert!(std::fs::read_to_string(root.join("src/main.rs")).unwrap().starts_with(&(generated_header("//") + "mod helpers;\n")));
         assert!(root.join("src/helpers.rs").exists());
@@ -3225,9 +3288,9 @@ CREATE INDEX book_idx ON book (code);
     fn graphql_bootstrap_writes_a_main_serving_the_schema() {
         let root = std::env::temp_dir().join(format!("octopux-bootstrap-graphql-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        bootstrap(&root, false, true, &mut "".as_bytes(), &mut Vec::new()).unwrap();
+        bootstrap(&root, false, true, Dialect::Sqlite, &mut "".as_bytes(), &mut Vec::new()).unwrap();
         let main = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
-        assert_eq!(main, super::with_header("//", &render_bootstrap_main(false, true)));
+        assert_eq!(main, super::with_header("//", &render_bootstrap_main(false, true, Dialect::Sqlite)));
         assert!(main.contains("struct Query(ApiQuery);") && main.contains("type Mutation = EmptyMutation;"));
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -3236,7 +3299,7 @@ CREATE INDEX book_idx ON book (code);
     fn graphql_roots_are_merged_into_the_bootstrapped_main_on_disk() {
         let root = std::env::temp_dir().join(format!("octopux-graphql-roots-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        bootstrap(&root, false, true, &mut "".as_bytes(), &mut Vec::new()).unwrap();
+        bootstrap(&root, false, true, Dialect::Sqlite, &mut "".as_bytes(), &mut Vec::new()).unwrap();
         super::add_graphql_roots(&root, "author", "Author").unwrap();
         super::add_graphql_roots(&root, "book", "Book").unwrap();
         let main = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
@@ -3259,7 +3322,7 @@ CREATE INDEX book_idx ON book (code);
         assert!(!root.join("src/main.rs").exists());
         // a main bootstrapped without --graphql
         std::fs::remove_dir_all(&root).unwrap();
-        bootstrap(&root, false, false, &mut "".as_bytes(), &mut Vec::new()).unwrap();
+        bootstrap(&root, false, false, Dialect::Sqlite, &mut "".as_bytes(), &mut Vec::new()).unwrap();
         let main = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
         super::add_graphql_roots(&root, "author", "Author").unwrap();
         assert_eq!(std::fs::read_to_string(root.join("src/main.rs")).unwrap(), main);
@@ -3294,7 +3357,7 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn generate_relation_accepts_graphql() {
-        let opt = Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "Author", "--child", "Book", "--graphql"]).unwrap();
+        let opt = Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "Author", "--child", "Book", "--sqlite", "--graphql"]).unwrap();
         assert!(matches!(opt, Opt::GenerateRelation { graphql: true, .. }));
     }
 
@@ -3338,14 +3401,14 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn graphql_bootstrap_requires_bootstrap() {
-        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--graphql"]).unwrap().graphql);
+        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--sqlite", "--graphql"]).unwrap().graphql);
         assert!(Cli::from_iter_safe(&["octopux", "--graphql"]).is_err());
     }
 
     #[test]
     fn graphql_bootstrap_serves_the_schema_and_graphiql() {
         for openapi in [false, true] {
-            let main = render_bootstrap_main(openapi, true);
+            let main = render_bootstrap_main(openapi, true, Dialect::Sqlite);
             assert!(main.contains("use async_graphql_actix_web::GraphQL;"));
             assert!(main.contains("#[derive(MergedObject, Default)]\nstruct Query(ApiQuery);"));
             assert!(main.contains("type Mutation = EmptyMutation;"));
@@ -3355,19 +3418,19 @@ CREATE INDEX book_idx ON book (code);
             assert!(main.starts_with("#![recursion_limit = \"512\"]\n\nmod helpers;"));
         }
         // the plain actix app has no route after apistos builds the app
-        assert!(render_bootstrap_main(true, true).contains("SwaggerUIConfig::new(&\"/swagger\")),\n            )\n            // GraphQL"));
+        assert!(render_bootstrap_main(true, true, Dialect::Sqlite).contains("SwaggerUIConfig::new(&\"/swagger\")),\n            )\n            // GraphQL"));
         for openapi in [false, true] {
-            let main = render_bootstrap_main(openapi, false);
+            let main = render_bootstrap_main(openapi, false, Dialect::Sqlite);
             assert!(!main.contains("graphql") && !main.contains("{graphql"));
         }
     }
 
     #[test]
     fn graphql_bootstrap_adds_async_graphql() {
-        let deps = bootstrap_dependencies(false, true);
+        let deps = bootstrap_dependencies(false, true, Dialect::Sqlite);
         assert!(deps.iter().any(|d| d == &["async-graphql@7", "--features", "chrono"]));
         assert!(deps.iter().any(|d| d == &["async-graphql-actix-web@7"]));
-        assert!(!bootstrap_dependencies(true, false).iter().any(|d| d[0].starts_with("async-graphql")));
+        assert!(!bootstrap_dependencies(true, false, Dialect::Sqlite).iter().any(|d| d[0].starts_with("async-graphql")));
     }
 
     #[test]
@@ -3392,13 +3455,13 @@ CREATE INDEX book_idx ON book (code);
         let rel = relation("Project", "Book", None);
         let patched = super::with_relation_field(&parent, &rel).unwrap();
         assert!(patched.contains(&format!(
-            "{}\n        /// The books of the project, paginated\n        async fn books(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::book::Book>> {{\n            crate::project_books::resolve(ctx, self.id, offset, limit).await\n        }}\n    }}",
+            "{}\n        /// The books of the project, paginated\n        async fn books(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::book::Book>> {{\n            super::project_books::resolve(ctx, self.id, offset, limit).await\n        }}\n    }}",
             super::GRAPHQL_RELATIONS_MARKER
         )));
         assert_eq!(super::with_relation_field(&patched, &rel).unwrap(), patched);
         // a second relation goes next to the first one
         let categories = super::with_relation_field(&patched, &relation("Project", "Category", Some("ProjectCategory"))).unwrap();
-        assert!(categories.contains("crate::project_books::resolve(") && categories.contains("crate::project_categories::resolve("));
+        assert!(categories.contains("super::project_books::resolve(") && categories.contains("super::project_categories::resolve("));
         // a model generated without --graphql has no complex object
         let plain = render_model("Project", false, false, true, false, &[field("name", "String")], Dialect::Sqlite);
         assert!(super::with_relation_field(&plain, &rel).is_none());
@@ -3406,7 +3469,7 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn graphql_roots_of_models_are_merged_once_into_the_schema() {
-        let main = render_bootstrap_main(true, true);
+        let main = render_bootstrap_main(true, true, Dialect::Sqlite);
         let first = super::with_graphql_roots(&main, "project", "Project").unwrap();
         assert!(first.contains("struct Query(ApiQuery, project::ProjectQuery);"));
         assert!(first.contains("#[derive(MergedObject, Default)]\nstruct Mutation(project::ProjectMutation);"));
@@ -3420,16 +3483,52 @@ CREATE INDEX book_idx ON book (code);
         let author = super::with_graphql_roots(&second, "author", "Author").unwrap();
         assert!(author.contains("book_author::BookAuthorQuery, author::AuthorQuery);"));
         // a main bootstrapped without --graphql has no schema
-        assert!(super::with_graphql_roots(&render_bootstrap_main(true, false), "project", "Project").is_none());
+        assert!(super::with_graphql_roots(&render_bootstrap_main(true, false, Dialect::Sqlite), "project", "Project").is_none());
+    }
+
+    #[test]
+    fn bootstrap_connects_to_the_database_of_every_combination() {
+        for dialect in [Dialect::Sqlite, Dialect::Postgres, Dialect::Mysql] {
+            let pool = super::bootstrap_pool(dialect);
+            for openapi in [false, true] {
+                for graphql in [false, true] {
+                    let main = render_bootstrap_main(openapi, graphql, dialect);
+                    assert!(!main.contains("{pool") && !main.contains("{graphql"));
+                    assert!(main.contains(&format!("use sqlx::{};", pool)));
+                    assert!(main.contains(&format!("let pool = {}::connect(", pool)));
+                    assert_eq!(main.contains("DATABASE_URL"), dialect != Dialect::Sqlite);
+                    assert_eq!(main.contains("apistos::web::scope(\"v1\")"), openapi);
+                    assert_eq!(main.contains("Schema::build("), graphql);
+                }
+            }
+            assert!(super::render_bootstrap_helpers(dialect).contains(&format!("use sqlx::{};\n\npub struct AppState {{\n    pub pool: {},", pool, pool)));
+        }
+        let sqlx = |dialect| bootstrap_dependencies(false, false, dialect).into_iter().find(|d| d[0] == "sqlx@0.9").unwrap();
+        assert!(sqlx(Dialect::Sqlite)[3].contains(",sqlite,"));
+        assert!(sqlx(Dialect::Postgres)[3].contains(",postgres,"));
+        assert!(sqlx(Dialect::Mysql)[3].contains(",mysql,"));
+    }
+
+    #[test]
+    fn bootstrap_database_flags_require_bootstrap_and_conflict() {
+        let cli = Cli::from_iter_safe(&["octopux", "--bootstrap", "--postgres"]).unwrap();
+        assert_eq!(Dialect::from_flags(cli.postgres, cli.mysql), Dialect::Postgres);
+        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--mysql"]).unwrap().mysql);
+        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--sqlite"]).unwrap().sqlite);
+        assert!(Cli::from_iter_safe(&["octopux", "--postgres"]).is_err());
+        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap"]).is_err());
+        assert!(Opt::from_iter_safe(&["octopux", "generate-relation", "--parent", "A", "--child", "B"]).is_err());
+        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--postgres", "--mysql"]).is_err());
+        assert!(Cli::from_iter_safe(&["octopux", "--bootstrap", "--sqlite", "--postgres"]).is_err());
     }
 
     #[test]
     fn bootstrap_dependencies_pin_octopux_to_the_cli_version() {
         let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
-        let deps = bootstrap_dependencies(true, false);
+        let deps = bootstrap_dependencies(true, false, Dialect::Sqlite);
         assert_eq!(deps[0], ["octopux", "--git", "https://github.com/ctaque/octopux", "--tag", tag.as_str(), "--features", "openapi,sqlx"]);
         assert!(deps.iter().any(|d| d == &["apistos-schemars@0.8", "--rename", "schemars"]));
-        let deps = bootstrap_dependencies(false, false);
+        let deps = bootstrap_dependencies(false, false, Dialect::Sqlite);
         assert_eq!(deps[0], ["octopux", "--git", "https://github.com/ctaque/octopux", "--tag", tag.as_str(), "--features", "sqlx"]);
         assert!(!deps.iter().any(|d| d[0].starts_with("apistos")));
     }
@@ -3443,7 +3542,7 @@ CREATE INDEX book_idx ON book (code);
         assert!(model.contains("#[sqlx_model(database = \"sqlite\", table = \"book_page\")]\n    pub struct UpdatableBookPage {"));
         // the default table is left to the derives
         assert_eq!(render_table_model("BookPage", Some("bookpage"), false, false, true, false, &fields, Dialect::Sqlite), render_model("BookPage", false, false, true, false, &fields, Dialect::Sqlite));
-        let opt = Opt::from_iter_safe(["octopux", "generate-model", "--name", "BookPage", "--table", "book_page"]).unwrap();
+        let opt = Opt::from_iter_safe(["octopux", "generate-model", "--name", "BookPage", "--sqlite", "--table", "book_page"]).unwrap();
         assert!(matches!(opt, Opt::GenerateModel { table: Some(ref t), .. } if t == "book_page"));
         // the GraphQL fields keep the model name, the root to merge names the module of the table
         let model = render_table_model("BookPage", Some("pages"), false, true, true, false, &fields, Dialect::Sqlite);
@@ -3469,9 +3568,9 @@ CREATE INDEX book_idx ON book (code);
         assert!(body.contains("SELECT categories.* FROM categories JOIN project_category ON project_category.category_id = categories.id WHERE project_category.project_id = $1"));
         assert!(body.contains("SELECT id FROM projects WHERE id = $1"));
         // the modules are named after the tables
-        assert!(body.contains("use crate::projects::{Project, Id};\n    use crate::categories::Category;"));
+        assert!(body.contains("use super::projects::{Project, Id};\n    use super::categories::Category;"));
         assert_eq!(relation.module(), "projects_categories");
         assert_eq!(render_relation_migration(&relation, Dialect::Sqlite), "CREATE INDEX IF NOT EXISTS project_category_project_id_idx ON project_category (project_id);\n");
-        assert!(Opt::from_iter_safe(["octopux", "generate-relation", "--parent", "A", "--child", "B", "--through-table", "ab"]).is_err());
+        assert!(Opt::from_iter_safe(["octopux", "generate-relation", "--parent", "A", "--child", "B", "--sqlite", "--through-table", "ab"]).is_err());
     }
 }

@@ -81,8 +81,8 @@ Add `chrono --features serde` when a model has date fields or uses `--timestamps
 
 ```bash
 cargo init my-api && cd my-api
-octopux --bootstrap --openapi
-octopux generate-model --name Project --fields --sqlx --migration --timestamps --openapi
+octopux --bootstrap --sqlite --openapi
+octopux generate-model --name Project --fields --sqlx --migration --timestamps --openapi --sqlite
 ```
 
 1. `--bootstrap` writes `src/main.rs` (an actix server on `127.0.0.1:8085`, a SQLite pool on `data.db`) and `src/helpers.rs` (the `AppState` holding the pool).
@@ -205,10 +205,10 @@ impl HasMany for ProjectBooks {
 Add `--graphql` to the three CLI commands to serve the models on `/graphql` (GraphiQL on `GET /graphql`), next to the REST routes:
 
 ```bash
-octopux --bootstrap --graphql
-octopux generate-model --name Author --fields --sqlx --migration --graphql
-octopux generate-model --name Book --fields --sqlx --migration --foreign-keys --graphql
-octopux generate-relation --parent Author --child Book --foreign-key=author_id --sqlx --migration --graphql
+octopux --bootstrap --sqlite --graphql
+octopux generate-model --name Author --fields --sqlx --migration --graphql --sqlite
+octopux generate-model --name Book --fields --sqlx --migration --foreign-keys --graphql --sqlite
+octopux generate-relation --parent Author --child Book --foreign-key=author_id --sqlx --migration --graphql --sqlite
 ```
 
 Each model gets the `author(id)` and `authors(offset, limit)` queries and the `createAuthor`, `updateAuthor` and `deleteAuthor` mutations, merged into the schema of `src/main.rs`. Relations become fields:
@@ -229,9 +229,9 @@ Files are written in `src` when it exists, in the working directory otherwise.
 
 | Command | Does |
 | --- | --- |
-| `octopux --bootstrap [--openapi] [--graphql]` | Write `src/main.rs` and `src/helpers.rs`, and offer to install the dependencies |
-| `octopux generate-model --name Project [OPTIONS]` | Write `project.rs` (and its migration) |
-| `octopux generate-relation --parent Project --child Book [OPTIONS]` | Write `project_books.rs`, the `books` of a project |
+| `octopux --bootstrap --sqlite\|--postgres\|--mysql [--openapi] [--graphql]` | Write `src/main.rs` and `src/helpers.rs`, and offer to install the dependencies |
+| `octopux generate-model --name Project --sqlite\|--postgres\|--mysql [OPTIONS]` | Write `project.rs` (and its migration) |
+| `octopux generate-relation --parent Project --child Book --sqlite\|--postgres\|--mysql [OPTIONS]` | Write `project_books.rs`, the `books` of a project |
 
 ### generate-model
 
@@ -243,7 +243,7 @@ Files are written in `src` when it exists, in the working directory otherwise.
 | `--foreign-keys` | Ask which table and column each field references |
 | `--unique` | Ask whether each field is unique |
 | `--timestamps` | Add `created_at`, `updated_at`, `deleted_at`, with soft delete |
-| `--sqlite` (default), `--postgres`, `--mysql` | The target database |
+| `--sqlite`, `--postgres`, `--mysql` | **Required.** The target database |
 | `--openapi`, `--graphql` | Document the routes / serve the model with GraphQL |
 | `--table` | The table name, the snake_case model name by default |
 | `--output` | The folder of the file (`--output=src/models`) |
@@ -252,7 +252,7 @@ Files are written in `src` when it exists, in the working directory otherwise.
 When asked for the fields, type `name:type` (e.g. `title:String`, or `stars:2` to pick from the menu). A trailing `?` makes the field optional (`stars:i32?`), `-` removes the last one, and an empty name ends the input:
 
 ```
-$ octopux generate-model --name Project --fields
+$ octopux generate-model --name Project --fields --sqlite
 ? Field 1 name › title:String
   ✔ title: String
 ? Field 2 name › stars:i32?
@@ -272,10 +272,10 @@ $ octopux generate-model --name Project --fields
 
 ```bash
 # one-to-many: GET /project/{id}/books
-octopux generate-relation --parent Project --child Book --sqlx --openapi
+octopux generate-relation --parent Project --child Book --sqlx --openapi --sqlite
 
 # many-to-many through ProjectCategory: GET /project/{id}/categories
-octopux generate-relation --parent Project --child Category --through ProjectCategory --sqlx --openapi
+octopux generate-relation --parent Project --child Category --through ProjectCategory --sqlx --openapi --sqlite
 ```
 
 Declare the file with `mod project_books;` and mount it with `.configure(project_books::configure)`.
