@@ -24,3 +24,10 @@ tokio = { version = "1", features = ["rt", "net", "time"] }
 [[bin]]
 name = "octopux"
 path = "src/main.rs"
+
+# Honored by `cargo install octopux-cli` (the package is then the build root;
+# inside the workspace the root Cargo.toml profile applies instead).
+# Stripping proc-macro dylibs breaks dlopen with recent macOS toolchains
+# ("mis-aligned LINKEDIT string pool").
+[profile.release.build-override]
+strip = false
