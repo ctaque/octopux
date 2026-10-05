@@ -1,0 +1,22 @@
+[package]
+name = "octopux-reverse"
+version.workspace = true
+edition.workspace = true
+description = "Reverse engineers a database into octopux models and relations, by piping its schema to the octopux CLI"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords = ["actix", "crud", "codegen", "database", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+structopt.workspace = true
+# Reads the schema of DATABASE_URL, and applies --migrations to it first
+# mysql-rsa: MySQL 8 authenticates with RSA (caching_sha2_password) without TLS
+sqlx = { workspace = true, features = ["mysql", "mysql-rsa"] }
+tokio = { version = "1", features = ["rt", "net", "time"] }
+
+[[bin]]
+name = "octopux-reverse"
+path = "src/main.rs"

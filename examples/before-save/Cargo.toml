@@ -1,0 +1,26 @@
+[package]
+name = "before_save"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[package.metadata.release]
+release = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+octopux = { workspace = true, features = ["openapi", "sqlx"] }
+actix-web.workspace = true
+async-graphql-actix-web = "7"
+anyhow.workspace = true
+apistos = { workspace = true, features = ["chrono", "swagger-ui"] }
+chrono.workspace = true
+schemars.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+async-trait.workspace = true
+argon2 = "0.6.0"
+env_logger.workspace = true
+async-graphql = { workspace = true, features = ["chrono"] }
+email_address = "0.2.9"

@@ -1,0 +1,15 @@
+[package]
+name = "octo-largedb"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actix-web = "4"
+apistos = { version = "0.9", features = ["chrono", "swagger-ui"] }
+async-graphql = { version = "7", features = ["chrono"] }
+async-graphql-actix-web = "7"
+chrono = { version = "0.4", features = ["serde"] }
+octopux = { version = "0.18.1", features = ["openapi", "sqlx"], git = "https://github.com/ctaque/octopux", tag = "v0.18.1" }
+schemars = { version = "0.8", package = "apistos-schemars" }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "macros", "migrate"] }

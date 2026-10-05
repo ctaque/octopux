@@ -38,7 +38,7 @@ fn impl_http_create_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
         #[::octopux::__private::async_trait]
         impl ::octopux::HttpCreate<#query, #app_state> for #name {
             async fn http_create(payload: ::octopux::__private::actix_web::web::Json<Box<#name>>, query: ::octopux::__private::actix_web::web::Query<#query>, state: ::octopux::__private::actix_web::web::Data<#app_state>) -> ::octopux::__private::actix_web::HttpResponse{
-                use ::octopux::NewModel;
+                use ::octopux::NewModel as _;
                 let params = query.into_inner();
                 let to_save = payload.into_inner();
                 let result = to_save.save(&params, &state).await;
@@ -137,7 +137,7 @@ fn impl_http_find_list_delete_macro(ast: &syn::DeriveInput) -> proc_macro::Token
                 query: ::octopux::__private::actix_web::web::Query<#list_query>,
                 state: ::octopux::__private::actix_web::web::Data<#app_state>
             ) -> ::octopux::__private::actix_web::HttpResponse{
-                use ::octopux::Model;
+                use ::octopux::Model as _;
                 let params = query.into_inner();
                 let result = #name::list(&params, &state).await;
                 match result {
@@ -150,7 +150,7 @@ fn impl_http_find_list_delete_macro(ast: &syn::DeriveInput) -> proc_macro::Token
                 query: ::octopux::__private::actix_web::web::Query<#find_query>,
                 state: ::octopux::__private::actix_web::web::Data<#app_state>
             ) -> ::octopux::__private::actix_web::HttpResponse {
-                use ::octopux::Model;
+                use ::octopux::Model as _;
                 let params = query.into_inner();
                 let result = #name::find(info.id.into(), &params, &state).await;
                 match result {
@@ -163,7 +163,7 @@ fn impl_http_find_list_delete_macro(ast: &syn::DeriveInput) -> proc_macro::Token
                 query: ::octopux::__private::actix_web::web::Query<#delete_query>,
                 state: ::octopux::__private::actix_web::web::Data<#app_state>
             ) -> ::octopux::__private::actix_web::HttpResponse {
-                use ::octopux::Model;
+                use ::octopux::Model as _;
                 let params = query.into_inner();
                 let find_params: #find_query = Default::default();
                 let result = #name::find(info.id.into(), &find_params, &state).await;
@@ -240,7 +240,7 @@ fn impl_http_update_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
                 query: ::octopux::__private::actix_web::web::Query<#query>,
                 state: ::octopux::__private::actix_web::web::Data<#app_state>
             ) -> ::octopux::__private::actix_web::HttpResponse {
-                use ::octopux::{Model, UpdatableModel};
+                use ::octopux::{Model as _, UpdatableModel as _};
                 let to_update = payload.into_inner();
                 #id_check
                 let params = query.into_inner();
