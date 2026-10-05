@@ -30,8 +30,8 @@
 //              -----------     -----------
 //               ---------        --------
 
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 pub struct AppState {
-    pub pool: PgPool,
+    pub pool: SqlitePool,
 }

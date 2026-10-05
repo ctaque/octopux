@@ -31,12 +31,12 @@
 --               ---------        --------
 
 CREATE TABLE IF NOT EXISTS page (
-    id BIGSERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     page_number INTEGER NOT NULL,
-    book_id BIGINT NOT NULL,
+    book_id INTEGER NOT NULL,
     contents TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE,
-    updated_at TIMESTAMP WITH TIME ZONE,
-    deleted_at TIMESTAMP WITH TIME ZONE,
+    created_at DATETIME,
+    updated_at DATETIME,
+    deleted_at DATETIME,
     FOREIGN KEY (book_id) REFERENCES book (id)
 );

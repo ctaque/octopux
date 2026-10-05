@@ -24,3 +24,4 @@ jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
 [dev-dependencies]
 actix-http = "3"
 serde_json.workspace = true
+tokio = { version = "1", features = ["rt"] }

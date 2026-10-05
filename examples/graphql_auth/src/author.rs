@@ -67,7 +67,7 @@
 
     #[derive(Default, Serialize, Deserialize, SimpleObject, sqlx::FromRow, HttpFindListDelete, SqlxModel)]
     #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
-    #[sqlx_model(database = "postgres")]
+    #[sqlx_model(database = "sqlite")]
     #[octopux_info(path = "author")]
     #[graphql(complex)]
     pub struct Author {
@@ -77,14 +77,14 @@
 
     #[derive(Serialize, Deserialize, InputObject, HttpCreate, SqlxNewModel)]
     #[http_create(SaveQuery, AppState)]
-    #[sqlx_model(database = "postgres", model = "Author")]
+    #[sqlx_model(database = "sqlite", model = "Author")]
     pub struct NewAuthor {
         pub name: String,
     }
 
     #[derive(Serialize, Deserialize, InputObject, sqlx::FromRow, HttpUpdate, SqlxUpdatableModel)]
     #[http_update(Id, UpdateQuery, Author, FindQuery, AppState)]
-    #[sqlx_model(database = "postgres")]
+    #[sqlx_model(database = "sqlite")]
     pub struct UpdatableAuthor {
         pub id: Id,
         pub name: String,

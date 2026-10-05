@@ -280,8 +280,7 @@ async fn main() -> std::io::Result<()> {
 "#;
 
 // The SQLite database is a file created next to the crate, the servers are reached through DATABASE_URL
-const BOOTSTRAP_SQLITE_CONNECT: &str = r#"    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
-let pool = SqlitePool::connect(&database_url).await.unwrap();"#;
+const BOOTSTRAP_SQLITE_CONNECT: &str = r#"    let pool = SqlitePool::connect("sqlite://data.db?mode=rwc").await.unwrap();"#;
 
 const BOOTSTRAP_SERVER_CONNECT: &str = r#"    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
     let pool = {pool}::connect(&database_url).await.unwrap();"#;
