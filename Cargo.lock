@@ -697,7 +697,7 @@ dependencies = [
  "chrono",
  "email_address",
  "env_logger",
- "octopux 0.22.0",
+ "octopux 0.23.0",
  "serde",
  "sqlx",
 ]
@@ -1754,7 +1754,7 @@ dependencies = [
  "async-graphql",
  "async-graphql-actix-web",
  "chrono",
- "octopux 0.22.0",
+ "octopux 0.23.0",
  "serde",
  "serde_json",
  "sqlx",
@@ -1772,7 +1772,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "jsonwebtoken",
- "octopux 0.22.0",
+ "octopux 0.23.0",
  "serde",
  "serde_json",
  "sqlx",
@@ -2376,7 +2376,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dotenvy",
- "octopux 0.22.0",
+ "octopux 0.23.0",
  "serde",
  "sqlx",
 ]
@@ -2490,7 +2490,7 @@ dependencies = [
 
 [[package]]
 name = "octopux"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "actix-web",
  "anyhow",
@@ -2498,7 +2498,7 @@ dependencies = [
  "apistos-schemars",
  "async-trait",
  "chrono",
- "octopux-derive 0.22.0",
+ "octopux-derive 0.23.0",
  "serde",
  "serde_json",
  "sqlx",
@@ -2506,7 +2506,7 @@ dependencies = [
 
 [[package]]
 name = "octopux-cli"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "chrono",
  "crossterm",
@@ -2530,7 +2530,7 @@ dependencies = [
 
 [[package]]
 name = "octopux-derive"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -2540,7 +2540,7 @@ dependencies = [
 
 [[package]]
 name = "octopux-reverse"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "sqlx",
  "structopt",
@@ -2568,7 +2568,7 @@ dependencies = [
  "apistos",
  "apistos-schemars",
  "chrono",
- "octopux 0.22.0",
+ "octopux 0.23.0",
  "serde",
  "sqlx",
 ]
@@ -2603,7 +2603,7 @@ version = "0.0.0"
 dependencies = [
  "actix-web",
  "chrono",
- "octopux 0.22.0",
+ "octopux 0.23.0",
  "serde",
 ]
 
@@ -3305,7 +3305,7 @@ version = "0.0.0"
 dependencies = [
  "actix-web",
  "chrono",
- "octopux 0.22.0",
+ "octopux 0.23.0",
  "serde",
 ]
 
