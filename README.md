@@ -374,6 +374,7 @@ Columns that cannot be mapped to a Rust type are skipped with a warning.
 | `--database-url` | The database to read, `DATABASE_URL` by default |
 | `--sqlite`, `--postgres`, `--mysql` | Check the database type of the url |
 | `--migrations <dir>` | Build the schema from sqlx migrations instead of a live database |
+| `--schema <name>` | Read the tables of this PostgreSQL schema instead of the current one (`public`), with `--postgres` |
 | `--tables`, `--exclude` | Only read, or skip, these tables (comma separated) |
 | `--no-relations` | Only generate the models |
 | `--run` | Run the commands instead of printing them |

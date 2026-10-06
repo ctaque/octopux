@@ -34,6 +34,10 @@ struct Cli {
     /// --migrations are then applied to it, there is no in-memory MySQL database
     #[structopt(long = "mysql")]
     mysql: bool,
+    /// Reads the tables of this PostgreSQL schema instead of the current one (`public` by default),
+    /// --migrations are then applied to it, requires --postgres
+    #[structopt(long = "schema", requires = "postgres")]
+    schema: Option<String>,
     /// Only reads these tables, comma separated
     #[structopt(long = "tables", use_delimiter = true)]
     tables: Vec<String>,
@@ -102,6 +106,9 @@ fn reverse(cli: &Cli) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let (dialect, tables) = runtime.block_on(async {
         let mut db = Database::connect(cli.database_url.as_deref(), cli.migrations.is_some()).await?;
+        if let Some(schema) = &cli.schema {
+            db.use_schema(schema).await?;
+        }
         if let Some(dir) = &cli.migrations {
             db.migrate(dir).await.map_err(|e| format!("migrations of {} not applied: {}", dir.display(), e))?;
         }
@@ -117,6 +124,9 @@ fn reverse(cli: &Cli) -> Result<(), String> {
         plan.relations.clear();
     }
     report(&plan, dialect);
+    if let Some(schema) = &cli.schema {
+        eprintln!("note: the models query the tables without their schema, add `{}` to the search_path of the app", schema);
+    }
     let options = Options { openapi: cli.openapi, graphql: cli.graphql, force: cli.force, output: cli.output.clone() };
     let commands = plan::commands(&plan, dialect, &options);
     if cli.run {
@@ -200,5 +210,12 @@ mod tests {
             Err("--mysql needs DATABASE_URL or --database-url, a throwaway database to apply the migrations to".to_string())
         );
         assert!(Cli::from_iter_safe(["octopux-reverse", "--mysql", "--postgres"]).is_err());
+    }
+
+    #[test]
+    fn the_schema_requires_postgres() {
+        assert_eq!(check("octopux-reverse --postgres --schema app --database-url postgres://localhost/db"), Ok(()));
+        assert!(Cli::from_iter_safe(["octopux-reverse", "--schema", "app", "--database-url", "postgres://localhost/db"]).is_err());
+        assert!(Cli::from_iter_safe(["octopux-reverse", "--schema", "app", "--mysql"]).is_err());
     }
 }

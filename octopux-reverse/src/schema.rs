@@ -181,6 +181,25 @@ impl Database {
         }
     }
 
+    // Reads, and migrates, the tables of the PostgreSQL schema `name` instead of the current schema: it becomes the
+    // search path of the connection, and so the current schema of the queries and the schema of the migrations
+    pub async fn use_schema(&mut self, name: &str) -> Result<(), String> {
+        let error = |e: sqlx::Error| e.to_string();
+        let Database::Postgres(conn) = self else {
+            return Err(format!("--schema reads a PostgreSQL schema, the database is a {} one", self.dialect().name()));
+        };
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
+            .bind(name)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(error)?;
+        if !exists {
+            return Err(format!("no `{}` schema in the database", name));
+        }
+        sqlx::query("SELECT set_config('search_path', quote_ident($1), false)").bind(name).execute(&mut *conn).await.map_err(error)?;
+        Ok(())
+    }
+
     // Applies the sqlx migrations of `dir`
     pub async fn migrate(&mut self, dir: &Path) -> Result<(), String> {
         let migrator = sqlx::migrate::Migrator::new(dir).await.map_err(|e| e.to_string())?;
