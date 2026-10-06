@@ -113,12 +113,12 @@
     impl Project {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The tasks of the project, paginated
-        async fn tasks(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::task::Task>> {
-            crate::project_tasks::resolve(ctx, self.id, offset, limit).await
+        async fn tasks(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::task::Task>> {
+            super::project_tasks::resolve(ctx, self.id, offset, limit).await
         }
         /// The milestones of the project, paginated
-        async fn milestones(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::milestone::Milestone>> {
-            crate::project_milestones::resolve(ctx, self.id, offset, limit).await
+        async fn milestones(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::milestone::Milestone>> {
+            super::project_milestones::resolve(ctx, self.id, offset, limit).await
         }
     }
 

@@ -117,16 +117,16 @@
     impl Invoice {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The payments of the invoice, paginated
-        async fn payments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::payment::Payment>> {
-            crate::invoice_payments::resolve(ctx, self.id, offset, limit).await
+        async fn payments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::payment::Payment>> {
+            super::invoice_payments::resolve(ctx, self.id, offset, limit).await
         }
         /// The invoicelines of the invoice, paginated
-        async fn invoicelines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::invoiceline::Invoiceline>> {
-            crate::invoice_invoicelines::resolve(ctx, self.id, offset, limit).await
+        async fn invoicelines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::invoiceline::Invoiceline>> {
+            super::invoice_invoicelines::resolve(ctx, self.id, offset, limit).await
         }
         /// The creditnotes of the invoice, paginated
-        async fn creditnotes(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::creditnote::Creditnote>> {
-            crate::invoice_creditnotes::resolve(ctx, self.id, offset, limit).await
+        async fn creditnotes(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::creditnote::Creditnote>> {
+            super::invoice_creditnotes::resolve(ctx, self.id, offset, limit).await
         }
     }
 

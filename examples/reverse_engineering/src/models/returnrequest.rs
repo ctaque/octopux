@@ -113,8 +113,8 @@
     impl Returnrequest {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The returnitems of the returnrequest, paginated
-        async fn returnitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::returnitem::Returnitem>> {
-            crate::returnrequest_returnitems::resolve(ctx, self.id, offset, limit).await
+        async fn returnitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::returnitem::Returnitem>> {
+            super::returnrequest_returnitems::resolve(ctx, self.id, offset, limit).await
         }
     }
 

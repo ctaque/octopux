@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::sla::{Sla, Id};
-    use crate::ticket::Ticket;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::sla::{Sla, Id};
+    use super::ticket::Ticket;
     use serde::Deserialize;
     use octopux::{
         HasMany,

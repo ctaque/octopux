@@ -110,12 +110,12 @@
     impl Ledgeraccount {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The ledgeraccounts of the ledgeraccount, paginated
-        async fn ledgeraccounts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ledgeraccount::Ledgeraccount>> {
-            crate::ledgeraccount_ledgeraccounts::resolve(ctx, self.id, offset, limit).await
+        async fn ledgeraccounts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ledgeraccount::Ledgeraccount>> {
+            super::ledgeraccount_ledgeraccounts::resolve(ctx, self.id, offset, limit).await
         }
         /// The journallines of the ledgeraccount, paginated
-        async fn journallines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::journalline::Journalline>> {
-            crate::ledgeraccount_journallines::resolve(ctx, self.id, offset, limit).await
+        async fn journallines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::journalline::Journalline>> {
+            super::ledgeraccount_journallines::resolve(ctx, self.id, offset, limit).await
         }
     }
 

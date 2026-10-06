@@ -107,8 +107,8 @@
     impl Brand {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The products of the brand, paginated
-        async fn products(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::product::Product>> {
-            crate::brand_products::resolve(ctx, self.id, offset, limit).await
+        async fn products(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::product::Product>> {
+            super::brand_products::resolve(ctx, self.id, offset, limit).await
         }
     }
 

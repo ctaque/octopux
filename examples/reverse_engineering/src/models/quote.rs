@@ -110,8 +110,8 @@
     impl Quote {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The quotelines of the quote, paginated
-        async fn quotelines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::quoteline::Quoteline>> {
-            crate::quote_quotelines::resolve(ctx, self.id, offset, limit).await
+        async fn quotelines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::quoteline::Quoteline>> {
+            super::quote_quotelines::resolve(ctx, self.id, offset, limit).await
         }
     }
 

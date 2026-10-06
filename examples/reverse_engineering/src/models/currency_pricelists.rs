@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::currency::{Currency, Id};
-    use crate::pricelist::Pricelist;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::currency::{Currency, Id};
+    use super::pricelist::Pricelist;
     use serde::Deserialize;
     use octopux::{
         HasMany,

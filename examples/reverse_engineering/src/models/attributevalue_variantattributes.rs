@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::attributevalue::{Attributevalue, Id};
-    use crate::variantattribute::Variantattribute;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::attributevalue::{Attributevalue, Id};
+    use super::variantattribute::Variantattribute;
     use serde::Deserialize;
     use octopux::{
         HasMany,

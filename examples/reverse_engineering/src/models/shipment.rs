@@ -116,8 +116,8 @@
     impl Shipment {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The shipmentitems of the shipment, paginated
-        async fn shipmentitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::shipmentitem::Shipmentitem>> {
-            crate::shipment_shipmentitems::resolve(ctx, self.id, offset, limit).await
+        async fn shipmentitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::shipmentitem::Shipmentitem>> {
+            super::shipment_shipmentitems::resolve(ctx, self.id, offset, limit).await
         }
     }
 

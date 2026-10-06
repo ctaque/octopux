@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::cart::{Cart, Id};
-    use crate::cartitem::Cartitem;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::cart::{Cart, Id};
+    use super::cartitem::Cartitem;
     use serde::Deserialize;
     use octopux::{
         HasMany,

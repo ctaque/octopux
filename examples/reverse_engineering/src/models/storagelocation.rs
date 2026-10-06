@@ -107,8 +107,8 @@
     impl Storagelocation {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The stocklevels of the storagelocation, paginated
-        async fn stocklevels(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::stocklevel::Stocklevel>> {
-            crate::storagelocation_stocklevels::resolve(ctx, self.id, offset, limit).await
+        async fn stocklevels(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::stocklevel::Stocklevel>> {
+            super::storagelocation_stocklevels::resolve(ctx, self.id, offset, limit).await
         }
     }
 

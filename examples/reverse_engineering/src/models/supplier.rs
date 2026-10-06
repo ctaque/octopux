@@ -110,12 +110,12 @@
     impl Supplier {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The suppliercontacts of the supplier, paginated
-        async fn suppliercontacts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::suppliercontact::Suppliercontact>> {
-            crate::supplier_suppliercontacts::resolve(ctx, self.id, offset, limit).await
+        async fn suppliercontacts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::suppliercontact::Suppliercontact>> {
+            super::supplier_suppliercontacts::resolve(ctx, self.id, offset, limit).await
         }
         /// The purchaseorders of the supplier, paginated
-        async fn purchaseorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::purchaseorder::Purchaseorder>> {
-            crate::supplier_purchaseorders::resolve(ctx, self.id, offset, limit).await
+        async fn purchaseorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::purchaseorder::Purchaseorder>> {
+            super::supplier_purchaseorders::resolve(ctx, self.id, offset, limit).await
         }
     }
 

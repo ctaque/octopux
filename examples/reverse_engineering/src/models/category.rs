@@ -110,12 +110,12 @@
     impl Category {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The products of the category, paginated
-        async fn products(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::product::Product>> {
-            crate::category_products::resolve(ctx, self.id, offset, limit).await
+        async fn products(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::product::Product>> {
+            super::category_products::resolve(ctx, self.id, offset, limit).await
         }
         /// The categories of the category, paginated
-        async fn categories(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::category::Category>> {
-            crate::category_categories::resolve(ctx, self.id, offset, limit).await
+        async fn categories(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::category::Category>> {
+            super::category_categories::resolve(ctx, self.id, offset, limit).await
         }
     }
 

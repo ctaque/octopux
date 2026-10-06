@@ -107,8 +107,8 @@
     impl Carrier {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The shipments of the carrier, paginated
-        async fn shipments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::shipment::Shipment>> {
-            crate::carrier_shipments::resolve(ctx, self.id, offset, limit).await
+        async fn shipments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::shipment::Shipment>> {
+            super::carrier_shipments::resolve(ctx, self.id, offset, limit).await
         }
     }
 

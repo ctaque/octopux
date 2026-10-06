@@ -116,8 +116,8 @@
     impl Opportunity {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The quotes of the opportunity, paginated
-        async fn quotes(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::quote::Quote>> {
-            crate::opportunity_quotes::resolve(ctx, self.id, offset, limit).await
+        async fn quotes(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::quote::Quote>> {
+            super::opportunity_quotes::resolve(ctx, self.id, offset, limit).await
         }
     }
 

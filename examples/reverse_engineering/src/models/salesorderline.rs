@@ -116,12 +116,12 @@
     impl Salesorderline {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The shipmentitems of the salesorderline, paginated
-        async fn shipmentitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::shipmentitem::Shipmentitem>> {
-            crate::salesorderline_shipmentitems::resolve(ctx, self.id, offset, limit).await
+        async fn shipmentitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::shipmentitem::Shipmentitem>> {
+            super::salesorderline_shipmentitems::resolve(ctx, self.id, offset, limit).await
         }
         /// The returnitems of the salesorderline, paginated
-        async fn returnitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::returnitem::Returnitem>> {
-            crate::salesorderline_returnitems::resolve(ctx, self.id, offset, limit).await
+        async fn returnitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::returnitem::Returnitem>> {
+            super::salesorderline_returnitems::resolve(ctx, self.id, offset, limit).await
         }
     }
 

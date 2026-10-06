@@ -110,12 +110,12 @@
     impl Coupon {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The salesorders of the coupon, paginated
-        async fn salesorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::salesorder::Salesorder>> {
-            crate::coupon_salesorders::resolve(ctx, self.id, offset, limit).await
+        async fn salesorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::salesorder::Salesorder>> {
+            super::coupon_salesorders::resolve(ctx, self.id, offset, limit).await
         }
         /// The ordercoupons of the coupon, paginated
-        async fn ordercoupons(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ordercoupon::Ordercoupon>> {
-            crate::coupon_ordercoupons::resolve(ctx, self.id, offset, limit).await
+        async fn ordercoupons(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ordercoupon::Ordercoupon>> {
+            super::coupon_ordercoupons::resolve(ctx, self.id, offset, limit).await
         }
     }
 

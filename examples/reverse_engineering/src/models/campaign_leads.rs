@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::campaign::{Campaign, Id};
-    use crate::lead::Lead;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::campaign::{Campaign, Id};
+    use super::lead::Lead;
     use serde::Deserialize;
     use octopux::{
         HasMany,

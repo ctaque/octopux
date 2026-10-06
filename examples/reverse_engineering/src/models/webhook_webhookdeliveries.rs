@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::webhook::{Webhook, Id};
-    use crate::webhookdelivery::Webhookdelivery;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::webhook::{Webhook, Id};
+    use super::webhookdelivery::Webhookdelivery;
     use serde::Deserialize;
     use octopux::{
         HasMany,

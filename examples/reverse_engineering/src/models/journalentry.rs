@@ -111,8 +111,8 @@
     impl Journalentry {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The journallines of the journalentry, paginated
-        async fn journallines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::journalline::Journalline>> {
-            crate::journalentry_journallines::resolve(ctx, self.id, offset, limit).await
+        async fn journallines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::journalline::Journalline>> {
+            super::journalentry_journallines::resolve(ctx, self.id, offset, limit).await
         }
     }
 

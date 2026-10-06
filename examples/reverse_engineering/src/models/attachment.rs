@@ -110,12 +110,12 @@
     impl Attachment {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The tasks of the attachment, paginated
-        async fn tasks(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::task::Task>> {
-            crate::attachment_tasks::resolve(ctx, self.id, offset, limit).await
+        async fn tasks(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::task::Task>> {
+            super::attachment_tasks::resolve(ctx, self.id, offset, limit).await
         }
         /// The taskattachments of the attachment, paginated
-        async fn taskattachments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::taskattachment::Taskattachment>> {
-            crate::attachment_taskattachments::resolve(ctx, self.id, offset, limit).await
+        async fn taskattachments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::taskattachment::Taskattachment>> {
+            super::attachment_taskattachments::resolve(ctx, self.id, offset, limit).await
         }
     }
 

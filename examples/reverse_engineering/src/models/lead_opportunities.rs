@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::lead::{Lead, Id};
-    use crate::opportunity::Opportunity;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::lead::{Lead, Id};
+    use super::opportunity::Opportunity;
     use serde::Deserialize;
     use octopux::{
         HasMany,

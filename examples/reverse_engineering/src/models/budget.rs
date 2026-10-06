@@ -113,8 +113,8 @@
     impl Budget {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The expenses of the budget, paginated
-        async fn expenses(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::expense::Expense>> {
-            crate::budget_expenses::resolve(ctx, self.id, offset, limit).await
+        async fn expenses(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::expense::Expense>> {
+            super::budget_expenses::resolve(ctx, self.id, offset, limit).await
         }
     }
 

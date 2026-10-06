@@ -113,48 +113,48 @@
     impl Productvariant {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The wishlists of the productvariant, paginated
-        async fn wishlists(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::wishlist::Wishlist>> {
-            crate::productvariant_wishlists::resolve(ctx, self.id, offset, limit).await
+        async fn wishlists(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::wishlist::Wishlist>> {
+            super::productvariant_wishlists::resolve(ctx, self.id, offset, limit).await
         }
         /// The wishlistitems of the productvariant, paginated
-        async fn wishlistitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::wishlistitem::Wishlistitem>> {
-            crate::productvariant_wishlistitems::resolve(ctx, self.id, offset, limit).await
+        async fn wishlistitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::wishlistitem::Wishlistitem>> {
+            super::productvariant_wishlistitems::resolve(ctx, self.id, offset, limit).await
         }
         /// The attributevalues of the productvariant, paginated
-        async fn attributevalues(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::attributevalue::Attributevalue>> {
-            crate::productvariant_attributevalues::resolve(ctx, self.id, offset, limit).await
+        async fn attributevalues(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::attributevalue::Attributevalue>> {
+            super::productvariant_attributevalues::resolve(ctx, self.id, offset, limit).await
         }
         /// The variantattributes of the productvariant, paginated
-        async fn variantattributes(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::variantattribute::Variantattribute>> {
-            crate::productvariant_variantattributes::resolve(ctx, self.id, offset, limit).await
+        async fn variantattributes(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::variantattribute::Variantattribute>> {
+            super::productvariant_variantattributes::resolve(ctx, self.id, offset, limit).await
         }
         /// The stockmovements of the productvariant, paginated
-        async fn stockmovements(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::stockmovement::Stockmovement>> {
-            crate::productvariant_stockmovements::resolve(ctx, self.id, offset, limit).await
+        async fn stockmovements(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::stockmovement::Stockmovement>> {
+            super::productvariant_stockmovements::resolve(ctx, self.id, offset, limit).await
         }
         /// The stocklevels of the productvariant, paginated
-        async fn stocklevels(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::stocklevel::Stocklevel>> {
-            crate::productvariant_stocklevels::resolve(ctx, self.id, offset, limit).await
+        async fn stocklevels(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::stocklevel::Stocklevel>> {
+            super::productvariant_stocklevels::resolve(ctx, self.id, offset, limit).await
         }
         /// The salesorderlines of the productvariant, paginated
-        async fn salesorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::salesorderline::Salesorderline>> {
-            crate::productvariant_salesorderlines::resolve(ctx, self.id, offset, limit).await
+        async fn salesorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::salesorderline::Salesorderline>> {
+            super::productvariant_salesorderlines::resolve(ctx, self.id, offset, limit).await
         }
         /// The quotelines of the productvariant, paginated
-        async fn quotelines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::quoteline::Quoteline>> {
-            crate::productvariant_quotelines::resolve(ctx, self.id, offset, limit).await
+        async fn quotelines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::quoteline::Quoteline>> {
+            super::productvariant_quotelines::resolve(ctx, self.id, offset, limit).await
         }
         /// The purchaseorderlines of the productvariant, paginated
-        async fn purchaseorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::purchaseorderline::Purchaseorderline>> {
-            crate::productvariant_purchaseorderlines::resolve(ctx, self.id, offset, limit).await
+        async fn purchaseorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::purchaseorderline::Purchaseorderline>> {
+            super::productvariant_purchaseorderlines::resolve(ctx, self.id, offset, limit).await
         }
         /// The pricelistitems of the productvariant, paginated
-        async fn pricelistitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::pricelistitem::Pricelistitem>> {
-            crate::productvariant_pricelistitems::resolve(ctx, self.id, offset, limit).await
+        async fn pricelistitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::pricelistitem::Pricelistitem>> {
+            super::productvariant_pricelistitems::resolve(ctx, self.id, offset, limit).await
         }
         /// The cartitems of the productvariant, paginated
-        async fn cartitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::cartitem::Cartitem>> {
-            crate::productvariant_cartitems::resolve(ctx, self.id, offset, limit).await
+        async fn cartitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::cartitem::Cartitem>> {
+            super::productvariant_cartitems::resolve(ctx, self.id, offset, limit).await
         }
     }
 

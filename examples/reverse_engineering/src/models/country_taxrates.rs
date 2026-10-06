@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::country::{Country, Id};
-    use crate::taxrate::Taxrate;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::country::{Country, Id};
+    use super::taxrate::Taxrate;
     use serde::Deserialize;
     use octopux::{
         HasMany,

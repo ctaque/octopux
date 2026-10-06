@@ -113,44 +113,44 @@
     impl Account {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The ticketmessages of the account, paginated
-        async fn ticketmessages(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ticketmessage::Ticketmessage>> {
-            crate::account_ticketmessages::resolve(ctx, self.id, offset, limit).await
+        async fn ticketmessages(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ticketmessage::Ticketmessage>> {
+            super::account_ticketmessages::resolve(ctx, self.id, offset, limit).await
         }
         /// The taskcomments of the account, paginated
-        async fn taskcomments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::taskcomment::Taskcomment>> {
-            crate::account_taskcomments::resolve(ctx, self.id, offset, limit).await
+        async fn taskcomments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::taskcomment::Taskcomment>> {
+            super::account_taskcomments::resolve(ctx, self.id, offset, limit).await
         }
         /// The sessions of the account, paginated
-        async fn sessions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::session::Session>> {
-            crate::account_sessions::resolve(ctx, self.id, offset, limit).await
+        async fn sessions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::session::Session>> {
+            super::account_sessions::resolve(ctx, self.id, offset, limit).await
         }
         /// The notifications of the account, paginated
-        async fn notifications(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::notification::Notification>> {
-            crate::account_notifications::resolve(ctx, self.id, offset, limit).await
+        async fn notifications(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::notification::Notification>> {
+            super::account_notifications::resolve(ctx, self.id, offset, limit).await
         }
         /// The employees of the account, paginated
-        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::employee::Employee>> {
-            crate::account_employees::resolve(ctx, self.id, offset, limit).await
+        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::employee::Employee>> {
+            super::account_employees::resolve(ctx, self.id, offset, limit).await
         }
         /// The auditlogs of the account, paginated
-        async fn auditlogs(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::auditlog::Auditlog>> {
-            crate::account_auditlogs::resolve(ctx, self.id, offset, limit).await
+        async fn auditlogs(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::auditlog::Auditlog>> {
+            super::account_auditlogs::resolve(ctx, self.id, offset, limit).await
         }
         /// The attachments of the account, paginated
-        async fn attachments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::attachment::Attachment>> {
-            crate::account_attachments::resolve(ctx, self.id, offset, limit).await
+        async fn attachments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::attachment::Attachment>> {
+            super::account_attachments::resolve(ctx, self.id, offset, limit).await
         }
         /// The apikeys of the account, paginated
-        async fn apikeys(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::apikey::Apikey>> {
-            crate::account_apikeys::resolve(ctx, self.id, offset, limit).await
+        async fn apikeys(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::apikey::Apikey>> {
+            super::account_apikeys::resolve(ctx, self.id, offset, limit).await
         }
         /// The roles of the account, paginated
-        async fn roles(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::role::Role>> {
-            crate::account_roles::resolve(ctx, self.id, offset, limit).await
+        async fn roles(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::role::Role>> {
+            super::account_roles::resolve(ctx, self.id, offset, limit).await
         }
         /// The accountroles of the account, paginated
-        async fn accountroles(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::accountrole::Accountrole>> {
-            crate::account_accountroles::resolve(ctx, self.id, offset, limit).await
+        async fn accountroles(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::accountrole::Accountrole>> {
+            super::account_accountroles::resolve(ctx, self.id, offset, limit).await
         }
     }
 

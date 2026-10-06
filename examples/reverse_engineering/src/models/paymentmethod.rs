@@ -107,8 +107,8 @@
     impl Paymentmethod {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The payments of the paymentmethod, paginated
-        async fn payments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::payment::Payment>> {
-            crate::paymentmethod_payments::resolve(ctx, self.id, offset, limit).await
+        async fn payments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::payment::Payment>> {
+            super::paymentmethod_payments::resolve(ctx, self.id, offset, limit).await
         }
     }
 

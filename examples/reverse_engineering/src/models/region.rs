@@ -107,8 +107,8 @@
     impl Region {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The cities of the region, paginated
-        async fn cities(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::city::City>> {
-            crate::region_cities::resolve(ctx, self.id, offset, limit).await
+        async fn cities(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::city::City>> {
+            super::region_cities::resolve(ctx, self.id, offset, limit).await
         }
     }
 

@@ -113,8 +113,8 @@
     impl Lead {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The opportunities of the lead, paginated
-        async fn opportunities(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::opportunity::Opportunity>> {
-            crate::lead_opportunities::resolve(ctx, self.id, offset, limit).await
+        async fn opportunities(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::opportunity::Opportunity>> {
+            super::lead_opportunities::resolve(ctx, self.id, offset, limit).await
         }
     }
 

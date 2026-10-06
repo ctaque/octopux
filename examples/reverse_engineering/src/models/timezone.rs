@@ -107,8 +107,8 @@
     impl Timezone {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The accounts of the timezone, paginated
-        async fn accounts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::account::Account>> {
-            crate::timezone_accounts::resolve(ctx, self.id, offset, limit).await
+        async fn accounts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::account::Account>> {
+            super::timezone_accounts::resolve(ctx, self.id, offset, limit).await
         }
     }
 

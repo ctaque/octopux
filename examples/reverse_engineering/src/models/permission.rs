@@ -107,12 +107,12 @@
     impl Permission {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The roles of the permission, paginated
-        async fn roles(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::role::Role>> {
-            crate::permission_roles::resolve(ctx, self.id, offset, limit).await
+        async fn roles(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::role::Role>> {
+            super::permission_roles::resolve(ctx, self.id, offset, limit).await
         }
         /// The rolepermissions of the permission, paginated
-        async fn rolepermissions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::rolepermission::Rolepermission>> {
-            crate::permission_rolepermissions::resolve(ctx, self.id, offset, limit).await
+        async fn rolepermissions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::rolepermission::Rolepermission>> {
+            super::permission_rolepermissions::resolve(ctx, self.id, offset, limit).await
         }
     }
 

@@ -107,12 +107,12 @@
     impl Tag {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The products of the tag, paginated
-        async fn products(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::product::Product>> {
-            crate::tag_products::resolve(ctx, self.id, offset, limit).await
+        async fn products(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::product::Product>> {
+            super::tag_products::resolve(ctx, self.id, offset, limit).await
         }
         /// The producttags of the tag, paginated
-        async fn producttags(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::producttag::Producttag>> {
-            crate::tag_producttags::resolve(ctx, self.id, offset, limit).await
+        async fn producttags(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::producttag::Producttag>> {
+            super::tag_producttags::resolve(ctx, self.id, offset, limit).await
         }
     }
 
