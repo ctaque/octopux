@@ -233,6 +233,7 @@ Files are written in `src` when it exists, in the working directory otherwise.
 | `octopux generate-model --name Project --sqlite\|--postgres\|--mysql [OPTIONS]` | Write `project.rs` (and its migration) |
 | `octopux generate-relation --parent Project --child Book --sqlite\|--postgres\|--mysql [OPTIONS]` | Write `project_books.rs`, the `books` of a project |
 | `octopux add-field --model Project --sqlite\|--postgres\|--mysql [OPTIONS]` | Add fields to `project.rs` (and the migration adding their columns), keeping the code written in it |
+| `octopux schema [OPTIONS]` | Draw the tables created by the migrations, their keys and relations |
 
 ### generate-model
 
@@ -302,6 +303,46 @@ $ octopux add-field --model Project --migration --sqlite
   ✔ stars: i32
 ? Field 2 name ›
 ? Default of `stars` for the existing rows › (SQL value, `?` makes the field optional) [0]
+```
+
+### schema
+
+Replays the migrations (`CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`) and draws the resulting tables in the console, without a database, side by side over the console width and sorted by name. A join table, two foreign keys besides an `id` and the timestamps, is a many-to-many relation.
+
+In a terminal, a filter input above the tables keeps the ones whose table, column or constraint name contains what is typed; keywords separated by `,` or `|` add up (`book, page` or `book|page`). The arrows and the pages scroll, `Esc` quits. When piped, all the tables are drawn.
+
+| Option | Description |
+| --- | --- |
+| `--migrations` | The migrations folder, `./migrations` by default |
+
+```
+$ octopux schema | cat
+┌──────────────────────────┐    ┌───────────────────────────────┐
+│ author                   │    │ book                          │
+├──────────────────────────┤    ├───────────────────────────────┤
+│ PK id   INTEGER          │    │ PK id        INTEGER          │
+│    name TEXT    not null │    │    title     TEXT    not null │
+└──────────────────────────┘    │    author_id INTEGER not null │
+                                └───────────────────────────────┘
+
+
+┌───────────────────────────────────┐
+│ page                              │
+├───────────────────────────────────┤
+│ PK id          INTEGER            │
+│    page_number INTEGER   not null │
+│ FK book_id     INTEGER   not null │ ──▶ book.id
+│    contents    TEXT      not null │
+│    created_at  DATETIME?          │
+│    updated_at  DATETIME?          │
+│    deleted_at  DATETIME?          │
+└───────────────────────────────────┘
+
+
+Relations
+  book  1──N  page  page.book_id
+
+PK primary key · FK foreign key · uniq unique · ? nullable
 ```
 
 ## Reverse engineering a database

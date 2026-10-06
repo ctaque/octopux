@@ -1,3 +1,5 @@
+mod diagram;
+
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use sqlx::TypeInfo;
 use structopt::clap::ArgGroup;
@@ -242,6 +244,13 @@ pub enum Opt {
         /// The folder of the model file, src when it exists by default, the working directory otherwise
         #[structopt(long = "output", parse(from_os_str))]
         output: Option<PathBuf>,
+    },
+    /// Draws the tables created by the migrations, their keys and relations
+    #[structopt(name = "schema")]
+    Schema {
+        /// The migrations folder
+        #[structopt(long = "migrations", parse(from_os_str), default_value = "./migrations")]
+        migrations: PathBuf,
     },
 }
 
@@ -561,6 +570,13 @@ struct Column {
     sql_type: String,
     // primary key or unique, which the databases require for a referenced column
     unique: bool,
+    primary_key: bool,
+    nullable: bool,
+    references: Option<Reference>,
+    // names of the CONSTRAINT clauses covering the column, `fk_book_author_id`
+    constraints: Vec<String>,
+    // the DEFAULT expression, `0` or `'draft'`
+    default: Option<String>,
 }
 
 // Types proposed when prompting for a field type, the first one is the default
@@ -834,8 +850,17 @@ fn field_line(field: &Field, width: usize) -> String {
 fn model_table(name: &str, fields: &[Field], dialect: Option<Dialect>) -> Table {
     let sql_type = |f: &Field| dialect.and_then(|d| d.column_type(&f.ty, f.length)).unwrap_or_default();
     let id_type = dialect.map_or(String::new(), |d| d.id_column().split_whitespace().nth(1).unwrap_or_default().to_string());
-    let id = Column { name: "id".to_string(), sql_type: id_type, unique: true };
-    let columns = fields.iter().map(|f| Column { name: f.name.clone(), sql_type: sql_type(f), unique: f.unique });
+    let id = Column { name: "id".to_string(), sql_type: id_type, unique: true, primary_key: true, nullable: false, references: None, constraints: Vec::new(), default: None };
+    let columns = fields.iter().map(|f| Column {
+        name: f.name.clone(),
+        sql_type: sql_type(f),
+        unique: f.unique,
+        primary_key: false,
+        nullable: f.ty.starts_with("Option<"),
+        references: f.references.clone(),
+        constraints: Vec::new(),
+        default: None,
+    });
     Table { name: name.to_string(), columns: std::iter::once(id).chain(columns).collect() }
 }
 
@@ -977,16 +1002,105 @@ fn unique_key(constraint: &str) -> Option<String> {
     }
 }
 
-// Columns of a CREATE TABLE body, the single column PRIMARY KEY and UNIQUE table constraints mark their column unique
+// The columns between the first parentheses of a constraint: `PRIMARY KEY (book_id, tag_id)` gives `book_id` and `tag_id`
+fn constraint_columns(constraint: &str) -> Vec<String> {
+    let (Some(open), Some(close)) = (constraint.find('('), constraint.find(')')) else { return Vec::new() };
+    constraint[open + 1..close].split(',').map(|c| sql_name(c.trim())).collect()
+}
+
+// The column named after the REFERENCES keyword of `sql`, `REFERENCES author (id)`, the `id` when no column is named
+fn references(sql: &str) -> Option<Reference> {
+    let start = sql.to_ascii_uppercase().find("REFERENCES")? + "REFERENCES".len();
+    let (table, rest) = first_word(&sql[start..]);
+    let column = rest.strip_prefix('(').and_then(|r| r.split(')').next()).map_or("id".to_string(), |c| sql_name(c.trim()));
+    Some(Reference { table: sql_name(table), column })
+}
+
+// The column and the reference of a single column FOREIGN KEY table constraint
+fn foreign_key(constraint: &str) -> Option<(String, Reference)> {
+    let start = constraint.to_ascii_uppercase().find("FOREIGN KEY")? + "FOREIGN KEY".len();
+    match constraint_columns(&constraint[start..]).as_slice() {
+        [column] => Some((column.clone(), references(&constraint[start..])?)),
+        _ => None,
+    }
+}
+
+// The words of a column definition, a quoted string or a parenthesized expression staying whole: `DEFAULT 'a b'`, `now()`
+fn definition_words(definition: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let (mut quote, mut depth, mut start) = (None, 0, None);
+    for (i, c) in definition.char_indices() {
+        match (c, quote) {
+            ('\'' | '"' | '`', None) => quote = Some(c),
+            (c, Some(q)) if c == q => quote = None,
+            ('(', None) => depth += 1,
+            (')', None) => depth -= 1,
+            (c, None) if c.is_whitespace() && depth == 0 => {
+                if let Some(s) = start.take() {
+                    words.push(&definition[s..i]);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        start.get_or_insert(i);
+    }
+    words.extend(start.map(|s| &definition[s..]));
+    words
+}
+
+// The expression after the DEFAULT keyword of a column definition, up to the next constraint
+fn column_default(definition: &str) -> Option<String> {
+    let words = definition_words(definition);
+    let start = words.iter().position(|w| w.eq_ignore_ascii_case("DEFAULT"))? + 1;
+    let end = |w: &&str| COLUMN_CONSTRAINTS.contains(&w.to_ascii_uppercase().as_str()) || w.eq_ignore_ascii_case("ON");
+    let expression: Vec<&str> = words[start..].iter().take_while(|w| !end(w)).copied().collect();
+    (!expression.is_empty()).then(|| expression.join(" "))
+}
+
+// The names following the CONSTRAINT keywords of a definition: `CONSTRAINT fk_book_author_id FOREIGN KEY ...`
+fn constraint_names(definition: &str) -> Vec<String> {
+    let words: Vec<&str> = definition.split_whitespace().collect();
+    words.windows(2).filter(|w| w[0].eq_ignore_ascii_case("CONSTRAINT")).map(|w| sql_name(w[1])).collect()
+}
+
+// Applies a PRIMARY KEY, UNIQUE or FOREIGN KEY table constraint to the columns it covers, with its name
+fn apply_constraint(columns: &mut [Column], constraint: &str) {
+    let names = constraint_names(constraint);
+    let upper = constraint.to_ascii_uppercase();
+    let covered = if ["PRIMARY KEY", "UNIQUE", "FOREIGN KEY"].iter().any(|k| upper.contains(k)) { constraint_columns(constraint) } else { Vec::new() };
+    let unique = unique_key(constraint);
+    let primary_key = if constraint.to_ascii_uppercase().contains("PRIMARY KEY") { constraint_columns(constraint) } else { Vec::new() };
+    let foreign_key = foreign_key(constraint);
+    for column in columns.iter_mut() {
+        column.unique |= unique.as_ref() == Some(&column.name);
+        if primary_key.contains(&column.name) {
+            column.primary_key = true;
+            column.nullable = false;
+        }
+        if let Some((_, reference)) = foreign_key.as_ref().filter(|(name, _)| *name == column.name) {
+            column.references = Some(reference.clone());
+        }
+        if covered.contains(&column.name) {
+            for name in &names {
+                if !column.constraints.contains(name) {
+                    column.constraints.push(name.clone());
+                }
+            }
+        }
+    }
+}
+
+// Columns of a CREATE TABLE body, with the PRIMARY KEY, UNIQUE and FOREIGN KEY table constraints applied to their columns
 fn parse_columns(body: &str) -> Vec<Column> {
     let mut columns = Vec::new();
-    let mut unique_keys = Vec::new();
+    let mut constraints = Vec::new();
     for definition in split_top_level(body) {
         let upper = definition.to_ascii_uppercase();
         let words: Vec<&str> = definition.split_whitespace().collect();
         let first = upper.split_whitespace().next().unwrap_or_default();
         if TABLE_CONSTRAINTS.contains(&first) {
-            unique_keys.extend(unique_key(definition));
+            constraints.push(definition);
             continue;
         }
         let sql_type: Vec<&str> = words[1..]
@@ -994,11 +1108,21 @@ fn parse_columns(body: &str) -> Vec<Column> {
             .take_while(|w| !COLUMN_CONSTRAINTS.contains(&w.to_ascii_uppercase().as_str()))
             .copied()
             .collect();
-        let unique = upper.contains("PRIMARY KEY") || upper.split_whitespace().any(|w| w == "UNIQUE");
-        columns.push(Column { name: sql_name(words[0]), sql_type: sql_type.join(" "), unique });
+        let primary_key = upper.contains("PRIMARY KEY");
+        let unique = primary_key || upper.split_whitespace().any(|w| w == "UNIQUE");
+        columns.push(Column {
+            name: sql_name(words[0]),
+            sql_type: sql_type.join(" "),
+            unique,
+            primary_key,
+            nullable: !primary_key && !upper.contains("NOT NULL"),
+            references: references(definition),
+            constraints: constraint_names(definition),
+            default: column_default(definition),
+        });
     }
-    for column in columns.iter_mut() {
-        column.unique |= unique_keys.contains(&column.name);
+    for constraint in constraints {
+        apply_constraint(&mut columns, constraint);
     }
     columns
 }
@@ -1148,11 +1272,7 @@ fn apply_alter_action(table: &mut Table, action: &str) {
             let definition = skip_keywords(rest, &["COLUMN", "IF NOT EXISTS"]);
             let first = first_word(definition).0.to_ascii_uppercase();
             if TABLE_CONSTRAINTS.contains(&first.as_str()) {
-                if let Some(key) = unique_key(definition) {
-                    for c in table.columns.iter_mut().filter(|c| c.name == key) {
-                        c.unique = true;
-                    }
-                }
+                apply_constraint(&mut table.columns, definition);
             } else {
                 for column in parse_columns(definition) {
                     if !table.columns.iter().any(|c| c.name == column.name) {
@@ -1162,10 +1282,31 @@ fn apply_alter_action(table: &mut Table, action: &str) {
             }
         }
         "DROP" => {
-            let (name, _) = first_word(skip_keywords(rest, &["COLUMN", "IF EXISTS"]));
-            if !TABLE_CONSTRAINTS.contains(&name.to_ascii_uppercase().as_str()) {
+            let (name, after) = first_word(skip_keywords(rest, &["COLUMN", "IF EXISTS"]));
+            if name.eq_ignore_ascii_case("CONSTRAINT") {
+                let name = sql_name(first_word(skip_keywords(after, &["IF EXISTS"])).0);
+                for c in table.columns.iter_mut() {
+                    c.constraints.retain(|n| *n != name);
+                }
+            } else if !TABLE_CONSTRAINTS.contains(&name.to_ascii_uppercase().as_str()) {
                 let name = sql_name(name);
                 table.columns.retain(|c| c.name != name);
+            }
+        }
+        // ALTER COLUMN name SET DEFAULT expression, or DROP DEFAULT
+        "ALTER" | "MODIFY" => {
+            let (name, after) = first_word(skip_keywords(rest, &["COLUMN"]));
+            let name = sql_name(name);
+            let words = definition_words(after);
+            let default = match words.as_slice() {
+                [set, default, ..] if set.eq_ignore_ascii_case("SET") && default.eq_ignore_ascii_case("DEFAULT") => Some(column_default(after)),
+                [drop, default, ..] if drop.eq_ignore_ascii_case("DROP") && default.eq_ignore_ascii_case("DEFAULT") => Some(None),
+                _ => None,
+            };
+            if let Some(default) = default {
+                for c in table.columns.iter_mut().filter(|c| c.name == name) {
+                    c.default = default.clone();
+                }
             }
         }
         "RENAME" => {
@@ -1269,18 +1410,19 @@ async fn database_tables(url: &str, root: &Path) -> Result<Vec<Table>, String> {
             .map_err(error)?;
             Ok(statements.iter().flatten().flat_map(|sql| parse_tables(sql)).collect())
         }
+        // only the unique columns the foreign keys can reference are read from the servers
         Some(Dialect::Postgres) => {
             let mut conn = sqlx::PgConnection::connect(url).await.map_err(error)?;
             let rows: Vec<(String, String, String, bool)> = sqlx::query_as(POSTGRES_COLUMNS).fetch_all(&mut conn).await.map_err(error)?;
             Ok(group_columns(rows.into_iter().map(|(table, name, udt, unique)| {
-                (table, Column { name, sql_type: postgres_column_type(&udt), unique })
+                (table, Column { name, sql_type: postgres_column_type(&udt), unique, primary_key: false, nullable: true, references: None, constraints: Vec::new(), default: None })
             })))
         }
         Some(Dialect::Mysql) => {
             let mut conn = sqlx::MySqlConnection::connect(url).await.map_err(error)?;
             let rows: Vec<(String, String, String, i64)> = sqlx::query_as(MYSQL_COLUMNS).fetch_all(&mut conn).await.map_err(error)?;
             Ok(group_columns(rows.into_iter().map(|(table, name, ty, key)| {
-                (table, Column { name, sql_type: ty.to_uppercase(), unique: key != 0 })
+                (table, Column { name, sql_type: ty.to_uppercase(), unique: key != 0, primary_key: false, nullable: true, references: None, constraints: Vec::new(), default: None })
             })))
         }
         None => Err("unsupported scheme, use sqlite:, postgres: or mysql:".to_string()),
@@ -3038,6 +3180,21 @@ fn run(opt: Opt) -> Result<(), Error> {
             let mut input = io::stdin().lock();
             add_fields(&mut input, &mut io::stdout(), &model, &table, &path, migration, tables.as_deref(), unique, default.as_deref(), dialect)
         }
+        Opt::Schema { migrations } => {
+            let mut tables = migration_tables(&migrations);
+            tables.sort_by_key(|t| t.name.to_lowercase());
+            if tables.is_empty() {
+                eprintln!("{}", failure(&format!("No table in {}", migrations.display())));
+                process::exit(1);
+            }
+            // filtered as the user types in a terminal, drawn whole when piped
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                diagram::explore(&tables)
+            } else {
+                print!("{}", diagram::render(&tables, diagram::console_width()));
+                Ok(())
+            }
+        }
     }
 }
 
@@ -3056,7 +3213,15 @@ mod tests {
     }
 
     fn column(name: &str, sql_type: &str, unique: bool) -> Column {
-        Column { name: name.into(), sql_type: sql_type.into(), unique }
+        Column { name: name.into(), sql_type: sql_type.into(), unique, primary_key: false, nullable: true, references: None, constraints: Vec::new(), default: None }
+    }
+
+    fn primary_key(name: &str, sql_type: &str) -> Column {
+        Column { primary_key: true, nullable: false, ..column(name, sql_type, true) }
+    }
+
+    fn not_null(column: Column) -> Column {
+        Column { nullable: false, ..column }
     }
 
     fn author_table() -> Table {
@@ -3079,14 +3244,20 @@ CREATE INDEX book_idx ON book (code);
             Table {
                 name: "author".into(),
                 columns: vec![
-                    column("id", "BIGSERIAL", true),
-                    column("name", "TEXT", false),
+                    primary_key("id", "BIGSERIAL"),
+                    not_null(column("name", "TEXT", false)),
                     column("score", "DOUBLE PRECISION", false),
-                    column("price", "DECIMAL(10, 2)", false),
-                    column("email", "VARCHAR(255)", true),
+                    Column { default: Some("0".into()), ..column("price", "DECIMAL(10, 2)", false) },
+                    not_null(column("email", "VARCHAR(255)", true)),
                 ],
             },
-            Table { name: "Book".into(), columns: vec![column("code", "TEXT", true), column("author_id", "INT8", false)] },
+            Table {
+                name: "Book".into(),
+                columns: vec![
+                    primary_key("code", "TEXT"),
+                    Column { references: Some(Reference { table: "author".into(), column: "id".into() }), ..column("author_id", "INT8", false) },
+                ],
+            },
         ]);
     }
 
@@ -3099,7 +3270,7 @@ CREATE INDEX book_idx ON book (code);
         std::fs::write(dir.join("1_create_book.sql"), "CREATE TABLE IF NOT EXISTS book (id INTEGER PRIMARY KEY AUTOINCREMENT);").unwrap();
         std::fs::write(dir.join("3_create_author.down.sql"), "CREATE TABLE author (id INTEGER);").unwrap();
         let tables = migration_tables(&dir);
-        assert_eq!(tables, vec![Table { name: "book".into(), columns: vec![column("id", "INTEGER", true)] }]);
+        assert_eq!(tables, vec![Table { name: "book".into(), columns: vec![primary_key("id", "INTEGER")] }]);
         assert!(migration_tables(&dir.join("missing")).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -4255,13 +4426,26 @@ CREATE INDEX book_idx ON book (code);
         std::fs::write(dir.join("2_alter_book.sql"), "ALTER TABLE book ADD COLUMN isbn TEXT DEFAULT 'a;b';
 ALTER TABLE IF EXISTS book ADD COLUMN IF NOT EXISTS author_id INT8 NOT NULL REFERENCES author (id), DROP COLUMN old;
 alter table book rename column title to name;
+ALTER TABLE book ALTER COLUMN name SET DEFAULT 'untitled', ALTER COLUMN isbn DROP DEFAULT;
+ALTER TABLE book ALTER COLUMN isbn SET DEFAULT ('a' || 'b');
 CREATE UNIQUE INDEX book_isbn_key ON book (isbn);
 ALTER TABLE book ADD CONSTRAINT book_author_key UNIQUE (author_id);
+ALTER TABLE book ADD CONSTRAINT book_isbn_check UNIQUE (isbn);
+ALTER TABLE book DROP CONSTRAINT book_isbn_check;
 ALTER TABLE book DROP CONSTRAINT fk_book_author_id;
 DROP TABLE IF EXISTS tmp;").unwrap();
         assert_eq!(migration_tables(&dir), vec![Table {
             name: "book".into(),
-            columns: vec![column("id", "INTEGER", true), column("name", "TEXT", false), column("isbn", "TEXT", true), column("author_id", "INT8", true)],
+            columns: vec![
+                primary_key("id", "INTEGER"),
+                Column { default: Some("'untitled'".into()), ..not_null(column("name", "TEXT", false)) },
+                Column { default: Some("('a' || 'b')".into()), ..column("isbn", "TEXT", true) },
+                Column {
+                    references: Some(Reference { table: "author".into(), column: "id".into() }),
+                    constraints: vec!["book_author_key".into()],
+                    ..not_null(column("author_id", "INT8", true))
+                },
+            ],
         }]);
         std::fs::write(dir.join("3_rename_book.sql"), "ALTER TABLE book RENAME TO books;").unwrap();
         assert_eq!(migration_tables(&dir)[0].name, "books");
