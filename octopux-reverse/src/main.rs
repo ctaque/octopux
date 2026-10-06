@@ -183,20 +183,15 @@ mod tests {
     }
 
     #[test]
-    fn the_url_is_one_of_the_database_flag() {
-        assert_eq!(check("octopux-reverse --mysql --database-url mysql://localhost/db"), Ok(()));
-        assert_eq!(check("octopux-reverse --mysql --database-url mariadb://localhost/db"), Ok(()));
+    fn the_url_is_a_supported_one() {
+        assert_eq!(check("octopux-reverse --database-url mysql://localhost/db"), Ok(()));
         assert_eq!(check("octopux-reverse --database-url postgres://localhost/db"), Ok(()));
-        assert_eq!(check("octopux-reverse --sqlite --migrations migrations"), Ok(()));
-        assert_eq!(
-            check("octopux-reverse --mysql --database-url postgres://localhost/db"),
-            Err("--mysql reads a MySQL database, the url is a `postgres:` one".to_string())
-        );
-        assert_eq!(
-            check("octopux-reverse --mysql --migrations migrations"),
-            Err("--mysql needs DATABASE_URL or --database-url, a throwaway database to apply the migrations to".to_string())
-        );
-        assert!(Cli::from_iter_safe(["octopux-reverse", "--mysql", "--postgres"]).is_err());
+        assert_eq!(check("octopux-reverse --database-url postgresql://localhost/db"), Ok(()));
+        assert_eq!(check("octopux-reverse --database-url sqlite://app.db"), Ok(()));
+        assert!(check("octopux-reverse --database-url mssql://localhost/db").is_err());
+        assert!(check("octopux-reverse --database-url localhost").is_err());
+        assert!(check("octopux-reverse").is_err());
+        assert!(Cli::from_iter_safe(["octopux-reverse", "--mysql"]).is_err());
     }
 
     #[test]
