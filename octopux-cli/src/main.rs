@@ -122,6 +122,10 @@ pub enum Opt {
         /// The table of the sqlx queries and the migration, the snake_case model name by default (`book_page` for `BookPage`)
         #[structopt(long = "table", hidden = true)]
         table: Option<String>,
+        /// The PostgreSQL schema of the table: the sqlx queries and the migration qualify the table with it (`app.book`),
+        /// the migration creates the schema if missing, requires --postgres
+        #[structopt(long = "schema", requires = "postgres")]
+        schema: Option<String>,
         /// Targets SQLite with the sqlx queries and the migration
         #[structopt(long = "sqlite", group = "database")]
         sqlite: bool,
@@ -174,6 +178,10 @@ pub enum Opt {
         /// The join table, the snake_case --through model by default (`project_category`)
         #[structopt(long = "through-table", requires = "through", hidden = true)]
         through_table: Option<String>,
+        /// The PostgreSQL schema of the tables: the sqlx queries and the migration qualify the tables with it (`app.book`),
+        /// requires --postgres
+        #[structopt(long = "schema", requires = "postgres")]
+        schema: Option<String>,
         /// Derives JsonSchema and ApiComponent on the query, and documents the route
         #[structopt(long = "openapi")]
         openapi: bool,
@@ -232,6 +240,9 @@ pub enum Opt {
         /// The table of the model, the snake_case model name by default (`book_page` for `BookPage`)
         #[structopt(long = "table", hidden = true)]
         table: Option<String>,
+        /// The PostgreSQL schema of the table: the migration qualifies the table with it (`app.book`), requires --postgres
+        #[structopt(long = "schema", requires = "postgres")]
+        schema: Option<String>,
         /// Targets SQLite with the migration
         #[structopt(long = "sqlite", group = "database")]
         sqlite: bool,
@@ -1341,7 +1352,7 @@ fn url_dialect(url: &str) -> Option<Dialect> {
 // Table of the sqlx migrations, not a model to reference
 const SQLX_MIGRATIONS_TABLE: &str = "_sqlx_migrations";
 
-// Columns of the current schema, with their udt name (`int8`, `_text` for an array of text)
+// Columns of the schema $1, the current one when NULL, with their udt name (`int8`, `_text` for an array of text)
 // and whether a single column primary key or unique constraint covers them
 const POSTGRES_COLUMNS: &str = "SELECT c.table_name::text, c.column_name::text, c.udt_name::text,
     EXISTS (
@@ -1355,7 +1366,7 @@ const POSTGRES_COLUMNS: &str = "SELECT c.table_name::text, c.column_name::text, 
     )
 FROM information_schema.columns c
 JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE' AND c.table_name <> '_sqlx_migrations'
+WHERE c.table_schema = COALESCE($1, current_schema()) AND t.table_type = 'BASE TABLE' AND c.table_name <> '_sqlx_migrations'
 ORDER BY c.table_name, c.ordinal_position";
 
 // information_schema columns are cast, MySQL 8 returns some of them as binary strings
@@ -1387,8 +1398,9 @@ fn postgres_column_type(udt: &str) -> String {
 }
 
 // Tables of the database of `url`, read without writing anything,
-// a relative SQLite file is looked up from `root`, the crate root, when missing from the working directory
-async fn database_tables(url: &str, root: &Path) -> Result<Vec<Table>, String> {
+// a relative SQLite file is looked up from `root`, the crate root, when missing from the working directory,
+// the tables of a PostgreSQL database are those of `schema`, of the current schema when None
+async fn database_tables(url: &str, root: &Path, schema: Option<&str>) -> Result<Vec<Table>, String> {
     use sqlx::Connection;
     let error = |e: sqlx::Error| e.to_string();
     match url_dialect(url) {
@@ -1413,7 +1425,7 @@ async fn database_tables(url: &str, root: &Path) -> Result<Vec<Table>, String> {
         // only the unique columns the foreign keys can reference are read from the servers
         Some(Dialect::Postgres) => {
             let mut conn = sqlx::PgConnection::connect(url).await.map_err(error)?;
-            let rows: Vec<(String, String, String, bool)> = sqlx::query_as(POSTGRES_COLUMNS).fetch_all(&mut conn).await.map_err(error)?;
+            let rows: Vec<(String, String, String, bool)> = sqlx::query_as(POSTGRES_COLUMNS).bind(schema).fetch_all(&mut conn).await.map_err(error)?;
             Ok(group_columns(rows.into_iter().map(|(table, name, udt, unique)| {
                 (table, Column { name, sql_type: postgres_column_type(&udt), unique, primary_key: false, nullable: true, references: None, constraints: Vec::new(), default: None })
             })))
@@ -1430,8 +1442,8 @@ async fn database_tables(url: &str, root: &Path) -> Result<Vec<Table>, String> {
 }
 
 // Tables proposed to the foreign keys: those of the DATABASE_URL database when it is set and reachable,
-// those created by the migrations otherwise
-fn known_tables(dialect: Dialect) -> Result<Vec<Table>, Error> {
+// those created by the migrations otherwise, the tables of the PostgreSQL `schema` when set
+fn known_tables(dialect: Dialect, schema: Option<&str>) -> Result<Vec<Table>, Error> {
     let cwd = std::env::current_dir()?;
     let migrations = migrations_dir(&cwd);
     let root = migrations.parent().map_or(PathBuf::new(), Path::to_path_buf);
@@ -1440,7 +1452,7 @@ fn known_tables(dialect: Dialect) -> Result<Vec<Table>, Error> {
             println!("{}", warning(&format!("`DATABASE_URL` is a {} database and the migration targets {}", db.name(), dialect.name())));
         }
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-        match runtime.block_on(database_tables(&url, &root)) {
+        match runtime.block_on(database_tables(&url, &root, schema)) {
             Ok(tables) => {
                 println!("{}", success(&format!("{} table{} read from `DATABASE_URL`", tables.len(), if tables.len() > 1 { "s" } else { "" })));
                 return Ok(tables);
@@ -1691,8 +1703,17 @@ fn sqlx_fetch_all(var: &str, result: &str, sql: &str, binds: &[String]) -> Strin
     )
 }
 
-// Fails with the fields whose type has no column type in the `dialect` database
-fn render_migration(name: &str, fields: &[Field], timestamps: bool, dialect: Dialect) -> Result<String, String> {
+// `table` in the PostgreSQL `schema` when set: `app.book`
+fn qualified(schema: Option<&str>, table: &str) -> String {
+    match schema {
+        Some(schema) => format!("{}.{}", schema, table),
+        None => table.to_string(),
+    }
+}
+
+// Fails with the fields whose type has no column type in the `dialect` database,
+// in the `schema`, created if missing, the referenced tables being in it too
+fn render_migration(name: &str, fields: &[Field], timestamps: bool, dialect: Dialect, schema: Option<&str>) -> Result<String, String> {
     let table = name.to_lowercase();
     let mut columns = vec![dialect.id_column().to_string()];
     columns.extend(column_definitions(fields, dialect)?);
@@ -1705,11 +1726,13 @@ fn render_migration(name: &str, fields: &[Field], timestamps: bool, dialect: Dia
     // the foreign keys are named so that MySQL can drop them
     columns.extend(fields.iter().filter(|f| f.unique).map(|f| format!("UNIQUE ({})", f.name)));
     columns.extend(fields.iter().filter_map(|f| {
-        f.references.as_ref().map(|r| format!("CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})", foreign_key_name(&table, &f.name), f.name, r.table, r.column))
+        f.references.as_ref().map(|r| format!("CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})", foreign_key_name(&table, &f.name), f.name, qualified(schema, &r.table), r.column))
     }));
+    let create_schema = schema.map_or(String::new(), |schema| format!("CREATE SCHEMA IF NOT EXISTS {};\n", schema));
     Ok(format!(
-        "CREATE TABLE IF NOT EXISTS {} (\n    {}\n);\n",
-        table,
+        "{}CREATE TABLE IF NOT EXISTS {} (\n    {}\n);\n",
+        create_schema,
+        qualified(schema, &table),
         columns.join(",\n    ")
     ))
 }
@@ -1746,12 +1769,13 @@ fn unique_index_name(table: &str, column: &str) -> String {
 
 // Migration adding the columns of `fields` to `table`, the columns `defaults` sets on the existing rows are given
 // by the field name, the unique columns get a unique index and the foreign keys a named constraint,
-// declared inline by SQLite, which cannot add a constraint to a table
-fn render_add_columns(table: &str, fields: &[Field], defaults: &[(String, String)], dialect: Dialect) -> Result<String, String> {
+// declared inline by SQLite, which cannot add a constraint to a table, `table` and the referenced tables are in the `schema` when set
+fn render_add_columns(table: &str, fields: &[Field], defaults: &[(String, String)], dialect: Dialect, schema: Option<&str>) -> Result<String, String> {
     let columns = column_definitions(fields, dialect)?;
+    let sql_table = qualified(schema, table);
     let mut sql = String::new();
     for (field, column) in fields.iter().zip(columns) {
-        sql += &format!("ALTER TABLE {} ADD COLUMN {}", table, column);
+        sql += &format!("ALTER TABLE {} ADD COLUMN {}", sql_table, column);
         if let Some((_, default)) = defaults.iter().find(|(name, _)| *name == field.name) {
             sql += &format!(" DEFAULT {}", default);
         }
@@ -1762,14 +1786,14 @@ fn render_add_columns(table: &str, fields: &[Field], defaults: &[(String, String
     }
     // SQLite refuses ADD COLUMN ... UNIQUE
     for field in fields.iter().filter(|f| f.unique) {
-        sql += &format!("CREATE UNIQUE INDEX {} ON {} ({});\n", unique_index_name(table, &field.name), table, field.name);
+        sql += &format!("CREATE UNIQUE INDEX {} ON {} ({});\n", unique_index_name(table, &field.name), sql_table, field.name);
     }
     if dialect != Dialect::Sqlite {
         for field in fields {
             if let Some(r) = &field.references {
                 sql += &format!(
                     "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({});\n",
-                    table, foreign_key_name(table, &field.name), field.name, r.table, r.column
+                    sql_table, foreign_key_name(table, &field.name), field.name, qualified(schema, &r.table), r.column
                 );
             }
         }
@@ -2090,16 +2114,20 @@ fn sqlx_model_attribute(dialect: Dialect, model: Option<&str>, table: Option<&st
 // The model of `name`, on its lowercase table
 #[cfg(test)]
 fn render_model(name: &str, openapi: bool, graphql: bool, sqlx: bool, timestamps: bool, fields: &[Field], dialect: Dialect) -> String {
-    render_table_model(name, None, openapi, graphql, sqlx, timestamps, fields, dialect)
+    render_table_model(name, None, None, openapi, graphql, sqlx, timestamps, fields, dialect)
 }
 
-// The model of `name`, its sqlx queries on `table` when set, on the lowercase name otherwise
+// The model of `name`, its sqlx queries on `table` when set, on the lowercase name otherwise, in the `schema` when set
 #[allow(clippy::too_many_arguments)]
-fn render_table_model(name: &str, table: Option<&str>, openapi: bool, graphql: bool, sqlx: bool, timestamps: bool, fields: &[Field], dialect: Dialect) -> String {
+fn render_table_model(name: &str, table: Option<&str>, schema: Option<&str>, openapi: bool, graphql: bool, sqlx: bool, timestamps: bool, fields: &[Field], dialect: Dialect) -> String {
     // the module of the model is named after its table
     let module = table.map_or_else(|| to_snake_case(name), String::from);
     // the derives default to the lowercase model name
-    let table = table.filter(|t| *t != name.to_lowercase());
+    let table = match schema {
+        Some(_) => Some(qualified(schema, &table.map_or_else(|| name.to_lowercase(), String::from))),
+        None => table.filter(|t| *t != name.to_lowercase()).map(String::from),
+    };
+    let table = table.as_deref();
     let (imports, derives, configure) = if openapi {
         (OPENAPI_IMPORTS, OPENAPI_DERIVES, OPENAPI_CONFIGURE)
     } else {
@@ -2316,6 +2344,8 @@ struct Relation {
     name: String,
     foreign_key: String,
     through: Option<Through>,
+    // PostgreSQL schema of the tables, the current one when None
+    schema: Option<String>,
 }
 
 impl Relation {
@@ -2331,6 +2361,7 @@ impl Relation {
                 model,
                 child_key: child_key.unwrap_or_else(|| format!("{}_id", child_snake)),
             }),
+            schema: None,
             parent,
             child,
         }
@@ -2348,6 +2379,17 @@ impl Relation {
             through.table = table;
         }
         self
+    }
+
+    // Qualifies the tables of the queries and the migration with the PostgreSQL `schema`
+    fn with_schema(mut self, schema: Option<String>) -> Relation {
+        self.schema = schema;
+        self
+    }
+
+    // `table` as the queries and the migration name it, in the schema when set
+    fn sql_table(&self, table: &str) -> String {
+        qualified(self.schema.as_deref(), table)
     }
 
     // Module of the relation, next to the models, named after the table of the parent: `project_books`
@@ -2370,8 +2412,8 @@ impl Relation {
 // Body of list_related: a page of the children, and the lookup of the parent when the page is empty,
 // to answer 404 for an unknown parent, `timestamps` skips the soft deleted rows
 fn relation_sqlx_body(relation: &Relation, timestamps: bool, dialect: Dialect) -> String {
-    let parent = &relation.parent_table;
-    let child = &relation.child_table;
+    let parent = &relation.sql_table(&relation.parent_table);
+    let child = &relation.sql_table(&relation.child_table);
     let placeholders = dialect.placeholders(3);
     let select = match &relation.through {
         None => format!(
@@ -2384,7 +2426,7 @@ fn relation_sqlx_body(relation: &Relation, timestamps: bool, dialect: Dialect) -
             placeholders[2]
         ),
         Some(through) => {
-            let join = &through.table;
+            let join = &relation.sql_table(&through.table);
             format!(
                 "SELECT {child}.* FROM {child} JOIN {join} ON {join}.{child_key} = {child}.id WHERE {join}.{fk} = {p1}{live} ORDER BY {child}.id LIMIT {p2} OFFSET {p3}",
                 child = child,
@@ -2525,7 +2567,8 @@ fn render_relation(relation: &Relation, openapi: bool, graphql: bool, sqlx: bool
 fn render_relation_migration(relation: &Relation, dialect: Dialect) -> String {
     let (table, column) = relation.foreign_key_column();
     let if_not_exists = if dialect == Dialect::Mysql { "" } else { "IF NOT EXISTS " };
-    format!("CREATE INDEX {}{}_{}_idx ON {} ({});\n", if_not_exists, table, column, table, column)
+    // the index is created in the schema of its table
+    format!("CREATE INDEX {}{}_{}_idx ON {} ({});\n", if_not_exists, table, column, relation.sql_table(&table), column)
 }
 
 const RELATION_TPL: &str = r#"
@@ -2824,6 +2867,7 @@ fn add_fields<R: BufRead, W: Write>(
     output: &mut W,
     model: &str,
     table: &str,
+    schema: Option<&str>,
     path: &str,
     migration: bool,
     tables: Option<&[Table]>,
@@ -2861,7 +2905,7 @@ fn add_fields<R: BufRead, W: Write>(
     let patched = with_added_fields(&source, model, &fields).unwrap_or_else(|e| fail(format!("{} not patched: {}", path, e)));
     let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
     let migration = if migration {
-        let sql = render_add_columns(table, &fields, &defaults, dialect).unwrap_or_else(|e| fail(format!("{}, no field added", e)));
+        let sql = render_add_columns(table, &fields, &defaults, dialect, schema).unwrap_or_else(|e| fail(format!("{}, no field added", e)));
         Some((migration_path(&format!("add_{}_to_{}", names.join("_"), table))?, sql))
     } else {
         None
@@ -3065,10 +3109,14 @@ fn main() -> Result<(), Error> {
 
 fn run(opt: Opt) -> Result<(), Error> {
     match opt {
-        Opt::GenerateModel { name, openapi, graphql, fields, sqlx, migration, foreign_keys, unique, table, sqlite: _, postgres, mysql, timestamps, force, output } => {
+        Opt::GenerateModel { name, openapi, graphql, fields, sqlx, migration, foreign_keys, unique, table, schema, sqlite: _, postgres, mysql, timestamps, force, output } => {
             let dialect = Dialect::from_flags(postgres, mysql);
             if let Some(invalid) = table.as_ref().filter(|t| !is_field_name(t)) {
                 eprintln!("{}", failure(&format!("`{}` is not a valid table name, use snake_case, model {} not generated", invalid, name)));
+                process::exit(1);
+            }
+            if let Some(invalid) = schema.as_ref().filter(|s| !is_field_name(s)) {
+                eprintln!("{}", failure(&format!("`{}` is not a valid schema name, use snake_case, model {} not generated", invalid, name)));
                 process::exit(1);
             }
             let table = table.unwrap_or_else(|| to_snake_case(&name));
@@ -3080,7 +3128,7 @@ fn run(opt: Opt) -> Result<(), Error> {
             let fields_asked = fields;
             let fields = if fields {
                 let strict = if migration { Some(dialect) } else { None };
-                let tables = if foreign_keys { known_tables(dialect)? } else { Vec::new() };
+                let tables = if foreign_keys { known_tables(dialect, schema.as_deref())? } else { Vec::new() };
                 let references = foreign_keys.then_some((table.as_str(), tables.as_slice()));
                 read_fields(&mut io::stdin().lock(), &mut io::stdout(), timestamps, strict, references, unique)?
             } else {
@@ -3097,7 +3145,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                 process::exit(1);
             }
             let sql = if migration {
-                Some(render_migration(&table, &fields, timestamps, dialect).unwrap_or_else(|e| {
+                Some(render_migration(&table, &fields, timestamps, dialect, schema.as_deref()).unwrap_or_else(|e| {
                     eprintln!("{}", failure(&format!("{}, model {} not generated", e, name)));
                     process::exit(1);
                 }))
@@ -3117,7 +3165,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                     process::exit(1);
                 }
             }
-            write_source(&path, &render_table_model(&name, Some(&table), openapi, graphql, sqlx, timestamps, &fields, dialect))?;
+            write_source(&path, &render_table_model(&name, Some(&table), schema.as_deref(), openapi, graphql, sqlx, timestamps, &fields, dialect))?;
             println!("{}", success(&format!("Successfully generated model {}, declare it with `mod {};`", path, module)));
             if graphql {
                 add_graphql_roots(&std::env::current_dir()?, &module, &name)?;
@@ -3133,9 +3181,11 @@ fn run(opt: Opt) -> Result<(), Error> {
             }
             Ok(())
         }
-        Opt::GenerateRelation { parent, child, name, foreign_key, through, child_key, parent_table, child_table, through_table, openapi, graphql, sqlx, migration, sqlite: _, postgres, mysql, timestamps, force, output } => {
+        Opt::GenerateRelation { parent, child, name, foreign_key, through, child_key, parent_table, child_table, through_table, schema, openapi, graphql, sqlx, migration, sqlite: _, postgres, mysql, timestamps, force, output } => {
             let dialect = Dialect::from_flags(postgres, mysql);
-            let relation = Relation::new(parent, child, name, foreign_key, through, child_key).with_tables(parent_table, child_table, through_table);
+            let relation = Relation::new(parent, child, name, foreign_key, through, child_key)
+                .with_tables(parent_table, child_table, through_table)
+                .with_schema(schema);
             let columns = [
                 Some(&relation.name),
                 Some(&relation.foreign_key),
@@ -3143,6 +3193,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                 Some(&relation.parent_table),
                 Some(&relation.child_table),
                 relation.through.as_ref().map(|t| &t.table),
+                relation.schema.as_ref(),
             ];
             if let Some(invalid) = columns.into_iter().flatten().find(|c| !is_field_name(c)) {
                 eprintln!("{}", failure(&format!("`{}` is not a valid name, use snake_case, relation not generated", invalid)));
@@ -3168,17 +3219,21 @@ fn run(opt: Opt) -> Result<(), Error> {
             }
             Ok(())
         }
-        Opt::AddField { model, migration, foreign_keys, unique, default, table, sqlite: _, postgres, mysql, output } => {
+        Opt::AddField { model, migration, foreign_keys, unique, default, table, schema, sqlite: _, postgres, mysql, output } => {
             let dialect = Dialect::from_flags(postgres, mysql);
             if let Some(invalid) = table.as_ref().filter(|t| !is_field_name(t)) {
                 eprintln!("{}", failure(&format!("`{}` is not a valid table name, use snake_case, no field added", invalid)));
                 process::exit(1);
             }
+            if let Some(invalid) = schema.as_ref().filter(|s| !is_field_name(s)) {
+                eprintln!("{}", failure(&format!("`{}` is not a valid schema name, use snake_case, no field added", invalid)));
+                process::exit(1);
+            }
             let table = table.unwrap_or_else(|| to_snake_case(&model));
             let path = source_path(&std::env::current_dir()?, output.as_deref(), &format!("{}.rs", table));
-            let tables = if foreign_keys { Some(known_tables(dialect)?) } else { None };
+            let tables = if foreign_keys { Some(known_tables(dialect, schema.as_deref())?) } else { None };
             let mut input = io::stdin().lock();
-            add_fields(&mut input, &mut io::stdout(), &model, &table, &path, migration, tables.as_deref(), unique, default.as_deref(), dialect)
+            add_fields(&mut input, &mut io::stdout(), &model, &table, schema.as_deref(), &path, migration, tables.as_deref(), unique, default.as_deref(), dialect)
         }
         Opt::Schema { migrations } => {
             let mut tables = migration_tables(&migrations);
@@ -3324,7 +3379,7 @@ CREATE INDEX book_idx ON book (code);
             field("title", "String"),
             Field { references: Some(Reference { table: "book".into(), column: "id".into() }), ..field("parent_id", "Option<i64>") },
         ];
-        assert_eq!(render_migration("Book", &fields, true, Dialect::Mysql).unwrap(), "CREATE TABLE IF NOT EXISTS book (
+        assert_eq!(render_migration("Book", &fields, true, Dialect::Mysql, None).unwrap(), "CREATE TABLE IF NOT EXISTS book (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     author_id BIGINT NOT NULL,
     title VARCHAR(255) NOT NULL,
@@ -3389,7 +3444,7 @@ CREATE INDEX book_idx ON book (code);
         assert!(output.contains("? Length of `title` › (VARCHAR, 1 to 16383) [255] "));
         assert!(output.contains("`20000` is not a MySQL VARCHAR length, pick 1 to 16383"));
         assert!(output.contains("`0` is not a MySQL VARCHAR length"));
-        assert_eq!(render_migration("Post", &fields, false, Dialect::Mysql).unwrap(), "CREATE TABLE IF NOT EXISTS post (
+        assert_eq!(render_migration("Post", &fields, false, Dialect::Mysql, None).unwrap(), "CREATE TABLE IF NOT EXISTS post (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     title VARCHAR(80) NOT NULL,
     summary VARCHAR(255)
@@ -3407,7 +3462,7 @@ CREATE INDEX book_idx ON book (code);
             field("title", "String"),
             Field { unique: true, references: Some(Reference { table: "author".into(), column: "id".into() }), ..field("author_id", "i64") },
         ];
-        assert_eq!(render_migration("Book", &fields, false, Dialect::Postgres).unwrap(), "CREATE TABLE IF NOT EXISTS book (
+        assert_eq!(render_migration("Book", &fields, false, Dialect::Postgres, None).unwrap(), "CREATE TABLE IF NOT EXISTS book (
     id BIGSERIAL PRIMARY KEY,
     email VARCHAR(255) NOT NULL,
     title VARCHAR(255) NOT NULL,
@@ -3720,7 +3775,7 @@ CREATE INDEX book_idx ON book (code);
             field("cover", "Option<Vec<u8>>"),
             field("hits", "u64"),
         ];
-        assert_eq!(render_migration("Project", &fields, false, Dialect::Sqlite).unwrap(), "CREATE TABLE IF NOT EXISTS project (
+        assert_eq!(render_migration("Project", &fields, false, Dialect::Sqlite, None).unwrap(), "CREATE TABLE IF NOT EXISTS project (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     stars INTEGER NOT NULL,
@@ -3732,7 +3787,7 @@ CREATE INDEX book_idx ON book (code);
     hits INTEGER NOT NULL
 );
 ");
-        assert_eq!(render_migration("Project", &[], false, Dialect::Sqlite).unwrap(), "CREATE TABLE IF NOT EXISTS project (\n    id INTEGER PRIMARY KEY AUTOINCREMENT\n);\n");
+        assert_eq!(render_migration("Project", &[], false, Dialect::Sqlite, None).unwrap(), "CREATE TABLE IF NOT EXISTS project (\n    id INTEGER PRIMARY KEY AUTOINCREMENT\n);\n");
     }
 
     #[test]
@@ -3765,7 +3820,7 @@ CREATE INDEX book_idx ON book (code);
             field("meta", "Option<serde_json::Value>"),
         ];
         assert_eq!(
-            render_migration("Project", &fields, false, Dialect::Sqlite),
+            render_migration("Project", &fields, false, Dialect::Sqlite, None),
             Err("no SQLite column type for tags: Vec<String>, meta: Option<serde_json::Value>".to_string())
         );
     }
@@ -3798,7 +3853,7 @@ CREATE INDEX book_idx ON book (code);
     fn migration_adds_timestamp_columns() {
         let fields = vec![field("title", "String")];
         assert_eq!(
-            render_migration("Project", &fields, true, Dialect::Sqlite).unwrap(),
+            render_migration("Project", &fields, true, Dialect::Sqlite, None).unwrap(),
             "CREATE TABLE IF NOT EXISTS project (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    title TEXT NOT NULL,\n    created_at DATETIME,\n    updated_at DATETIME,\n    deleted_at DATETIME\n);\n"
         );
     }
@@ -3836,7 +3891,7 @@ CREATE INDEX book_idx ON book (code);
         // NaiveDateTime does not import DateTime
         let model = render_model("Project", false, false, false, false, &fields[2..3], Dialect::Sqlite);
         assert!(model.contains("use chrono::{NaiveDateTime};"));
-        assert!(render_migration("Project", &fields, false, Dialect::Sqlite).unwrap().contains(
+        assert!(render_migration("Project", &fields, false, Dialect::Sqlite, None).unwrap().contains(
             "    published_at DATETIME NOT NULL,\n    release DATE NOT NULL,\n    seen_at DATETIME,\n    opens TIME NOT NULL\n"
         ));
     }
@@ -3877,7 +3932,7 @@ CREATE INDEX book_idx ON book (code);
             field("slots", "Vec<NaiveTime>"),
             field("blobs", "Vec<Vec<u8>>"),
         ];
-        assert_eq!(render_migration("Project", &fields, true, Dialect::Postgres).unwrap(), "CREATE TABLE IF NOT EXISTS project (
+        assert_eq!(render_migration("Project", &fields, true, Dialect::Postgres, None).unwrap(), "CREATE TABLE IF NOT EXISTS project (
     id BIGSERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
     stars INT4 NOT NULL,
@@ -3900,7 +3955,7 @@ CREATE INDEX book_idx ON book (code);
 ");
         let unsigned = vec![field("count", "u32")];
         assert_eq!(
-            render_migration("Project", &unsigned, false, Dialect::Postgres),
+            render_migration("Project", &unsigned, false, Dialect::Postgres, None),
             Err("no PostgreSQL column type for count: u32".to_string())
         );
     }
@@ -3915,7 +3970,7 @@ CREATE INDEX book_idx ON book (code);
             field("done", "bool"),
             field("summary", "Option<String>"),
         ];
-        assert_eq!(render_migration("Project", &fields, true, Dialect::Mysql).unwrap(), "CREATE TABLE IF NOT EXISTS project (
+        assert_eq!(render_migration("Project", &fields, true, Dialect::Mysql, None).unwrap(), "CREATE TABLE IF NOT EXISTS project (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
     stars INT NOT NULL,
@@ -3929,7 +3984,7 @@ CREATE INDEX book_idx ON book (code);
 );
 ");
         let tags = vec![field("tags", "Vec<String>")];
-        assert!(render_migration("Project", &tags, false, Dialect::Mysql).is_err());
+        assert!(render_migration("Project", &tags, false, Dialect::Mysql, None).is_err());
     }
 
     #[test]
@@ -4379,16 +4434,16 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn table_option_names_the_table_of_the_sqlx_derives() {
         let fields = [field("title", "String")];
-        let model = render_table_model("BookPage", Some("book_page"), false, false, true, false, &fields, Dialect::Sqlite);
+        let model = render_table_model("BookPage", Some("book_page"), None, false, false, true, false, &fields, Dialect::Sqlite);
         assert!(model.contains("#[sqlx_model(database = \"sqlite\", table = \"book_page\")]\n    #[octopux_info(path = \"bookpage\")]\n    pub struct BookPage {"));
         assert!(model.contains("#[sqlx_model(database = \"sqlite\", model = \"BookPage\", table = \"book_page\")]\n    pub struct NewBookPage {"));
         assert!(model.contains("#[sqlx_model(database = \"sqlite\", table = \"book_page\")]\n    pub struct UpdatableBookPage {"));
         // the default table is left to the derives
-        assert_eq!(render_table_model("BookPage", Some("bookpage"), false, false, true, false, &fields, Dialect::Sqlite), render_model("BookPage", false, false, true, false, &fields, Dialect::Sqlite));
+        assert_eq!(render_table_model("BookPage", Some("bookpage"), None, false, false, true, false, &fields, Dialect::Sqlite), render_model("BookPage", false, false, true, false, &fields, Dialect::Sqlite));
         let opt = Opt::from_iter_safe(["octopux", "generate-model", "--name", "BookPage", "--sqlite", "--table", "book_page"]).unwrap();
         assert!(matches!(opt, Opt::GenerateModel { table: Some(ref t), .. } if t == "book_page"));
         // the GraphQL fields keep the model name, the root to merge names the module of the table
-        let model = render_table_model("BookPage", Some("pages"), false, true, true, false, &fields, Dialect::Sqlite);
+        let model = render_table_model("BookPage", Some("pages"), None, false, true, true, false, &fields, Dialect::Sqlite);
         assert!(model.contains("async fn book_page(") && model.contains("async fn create_book_page(") && model.contains("struct Query(pages::BookPageQuery, ...)"));
     }
 
@@ -4415,6 +4470,43 @@ CREATE INDEX book_idx ON book (code);
         assert_eq!(relation.module(), "projects_categories");
         assert_eq!(render_relation_migration(&relation, Dialect::Sqlite), "CREATE INDEX IF NOT EXISTS project_category_project_id_idx ON project_category (project_id);\n");
         assert!(Opt::from_iter_safe(["octopux", "generate-relation", "--parent", "A", "--child", "B", "--sqlite", "--through-table", "ab"]).is_err());
+    }
+
+    #[test]
+    fn schema_option_qualifies_the_tables() {
+        let mut author = field("author_id", "i64");
+        author.references = Some(Reference { table: "author".into(), column: "id".into() });
+        let fields = [field("title", "String"), author];
+        let migration = render_migration("Book", &fields, false, Dialect::Postgres, Some("app")).unwrap();
+        assert!(migration.starts_with("CREATE SCHEMA IF NOT EXISTS app;\nCREATE TABLE IF NOT EXISTS app.book (\n"), "{}", migration);
+        assert!(migration.contains("CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERENCES app.author (id)"), "{}", migration);
+        // the module keeps the table name, the derives query the qualified table
+        let model = render_table_model("Book", Some("book"), Some("app"), false, true, true, false, &fields[..1], Dialect::Postgres);
+        assert!(model.contains("#[sqlx_model(database = \"postgres\", table = \"app.book\")]\n    #[octopux_info(path = \"book\")]\n    #[graphql(complex)]\n    pub struct Book {"), "{}", model);
+        assert!(model.contains("#[sqlx_model(database = \"postgres\", model = \"Book\", table = \"app.book\")]\n    pub struct NewBook {"));
+        assert!(model.contains("struct Query(book::BookQuery, ...)"));
+        let columns = render_add_columns("book", &fields, &[], Dialect::Postgres, Some("app")).unwrap();
+        assert!(columns.contains("ALTER TABLE app.book ADD COLUMN title VARCHAR(255) NOT NULL;\n"), "{}", columns);
+        assert!(columns.contains("ALTER TABLE app.book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERENCES app.author (id);\n"), "{}", columns);
+        let relation = Relation::new("Project".into(), "Category".into(), None, None, Some("ProjectCategory".into()), None).with_schema(Some("app".into()));
+        let body = render_relation(&relation, false, false, true, false, Dialect::Postgres);
+        assert!(body.contains("SELECT app.category.* FROM app.category JOIN app.project_category ON app.project_category.category_id = app.category.id WHERE app.project_category.project_id = $1"), "{}", body);
+        assert!(body.contains("SELECT id FROM app.project WHERE id = $1"));
+        assert!(body.contains("use super::project::{Project, Id};\n    use super::category::Category;"));
+        assert_eq!(render_relation_migration(&relation, Dialect::Postgres), "CREATE INDEX IF NOT EXISTS project_category_project_id_idx ON app.project_category (project_id);\n");
+    }
+
+    #[test]
+    fn schema_option_requires_postgres() {
+        for args in [
+            &["octopux", "generate-model", "--name", "Book", "--schema", "app"][..],
+            &["octopux", "generate-relation", "--parent", "A", "--child", "B", "--schema", "app"],
+            &["octopux", "add-field", "--model", "Book", "--schema", "app"],
+        ] {
+            assert!(Opt::from_iter_safe(args.iter().chain(&["--sqlite"])).is_err(), "{:?}", args);
+            assert!(Opt::from_iter_safe(args.iter().chain(&["--mysql"])).is_err(), "{:?}", args);
+            assert!(Opt::from_iter_safe(args.iter().chain(&["--postgres"])).is_ok(), "{:?}", args);
+        }
     }
 
     #[test]
@@ -4460,24 +4552,24 @@ DROP TABLE IF EXISTS tmp;").unwrap();
             Field { references: Some(Reference { table: "author".into(), column: "id".into() }), ..field("author_id", "Option<i64>") },
         ];
         let defaults = vec![("stars".to_string(), "0".to_string())];
-        assert_eq!(render_add_columns("book", &fields, &defaults, Dialect::Sqlite).unwrap(), "ALTER TABLE book ADD COLUMN stars INTEGER NOT NULL DEFAULT 0;
+        assert_eq!(render_add_columns("book", &fields, &defaults, Dialect::Sqlite, None).unwrap(), "ALTER TABLE book ADD COLUMN stars INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE book ADD COLUMN isbn TEXT;
 ALTER TABLE book ADD COLUMN author_id INTEGER REFERENCES author (id);
 CREATE UNIQUE INDEX book_isbn_key ON book (isbn);
 ");
-        assert_eq!(render_add_columns("book", &fields, &defaults, Dialect::Postgres).unwrap(), "ALTER TABLE book ADD COLUMN stars INT4 NOT NULL DEFAULT 0;
+        assert_eq!(render_add_columns("book", &fields, &defaults, Dialect::Postgres, None).unwrap(), "ALTER TABLE book ADD COLUMN stars INT4 NOT NULL DEFAULT 0;
 ALTER TABLE book ADD COLUMN isbn VARCHAR(20);
 ALTER TABLE book ADD COLUMN author_id INT8;
 CREATE UNIQUE INDEX book_isbn_key ON book (isbn);
 ALTER TABLE book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERENCES author (id);
 ");
-        assert_eq!(render_add_columns("book", &fields, &defaults, Dialect::Mysql).unwrap(), "ALTER TABLE book ADD COLUMN stars INT NOT NULL DEFAULT 0;
+        assert_eq!(render_add_columns("book", &fields, &defaults, Dialect::Mysql, None).unwrap(), "ALTER TABLE book ADD COLUMN stars INT NOT NULL DEFAULT 0;
 ALTER TABLE book ADD COLUMN isbn VARCHAR(20);
 ALTER TABLE book ADD COLUMN author_id BIGINT;
 CREATE UNIQUE INDEX book_isbn_key ON book (isbn);
 ALTER TABLE book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERENCES author (id);
 ");
-        assert!(render_add_columns("book", &[field("tags", "Vec<String>")], &[], Dialect::Sqlite).is_err());
+        assert!(render_add_columns("book", &[field("tags", "Vec<String>")], &[], Dialect::Sqlite, None).is_err());
     }
 
     #[test]
@@ -4534,7 +4626,7 @@ ALTER TABLE book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERE
 
     // A model file of `fields`, as `generate-model` writes it
     fn model_file(fields: &[Field], graphql: bool, sqlx: bool, timestamps: bool, dialect: Dialect) -> String {
-        super::with_header("//", &render_table_model("BookPage", Some("book_page"), false, graphql, sqlx, timestamps, fields, dialect))
+        super::with_header("//", &render_table_model("BookPage", Some("book_page"), None, false, graphql, sqlx, timestamps, fields, dialect))
     }
 
     #[test]

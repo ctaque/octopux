@@ -248,6 +248,7 @@ Files are written in `src` when it exists, in the working directory otherwise.
 | `--sqlite`, `--postgres`, `--mysql` | **Required.** The target database |
 | `--openapi`, `--graphql` | Document the routes / serve the model with GraphQL |
 | `--table` | The table name, the snake_case model name by default |
+| `--schema <name>` | With `--postgres`, the schema of the table: the queries and the migration use `app.project`, the migration creates the schema if missing |
 | `--output` | The folder of the file (`--output=src/models`) |
 | `--force` | Overwrite an existing file |
 
@@ -270,7 +271,7 @@ $ octopux generate-model --name Project --fields --sqlite
 | `--foreign-key` | The column of the child referencing the parent, `project_id` by default |
 | `--through` | Many-to-many: the join model |
 | `--name` | The route segment, `books` by default |
-| `--sqlx`, `--migration`, `--timestamps`, `--openapi`, `--graphql`, database flags, `--output`, `--force` | As for `generate-model` |
+| `--sqlx`, `--migration`, `--timestamps`, `--openapi`, `--graphql`, database flags, `--schema`, `--output`, `--force` | As for `generate-model` |
 
 ```bash
 # one-to-many: GET /project/{id}/books
@@ -293,6 +294,7 @@ Asks for fields, as `generate-model --fields`, and inserts them in the `Project`
 | `--foreign-keys`, `--unique` | As for `generate-model` |
 | `--default` | The SQL default of the new non-optional columns on the existing rows (`--default "'none'"`), asked for each of them otherwise |
 | `--sqlite`, `--postgres`, `--mysql` | **Required.** The target database |
+| `--schema <name>` | With `--postgres`, the schema of the table: the migration alters `app.project` |
 | `--output` | The folder of the file |
 
 A non-optional column needs a default for the rows already in the table, enter `?` instead to make the field optional. SQLite only adds a foreign key column when it is nullable, and only with a constant default (no `CURRENT_TIMESTAMP`).
