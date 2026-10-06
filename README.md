@@ -307,7 +307,7 @@ $ octopux add-field --model Project --migration --sqlite
 
 ### schema
 
-Replays the migrations (`CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`) and draws the resulting tables in the console, without a database, side by side over the console width and sorted by name. A join table, two foreign keys besides an `id` and the timestamps, is a many-to-many relation.
+Displays the current SQL schema in our terminal.
 
 In a terminal, a filter input above the tables keeps the ones whose table, column or constraint name contains what is typed; keywords separated by `,` or `|` add up (`book, page` or `book|page`). The arrows and the pages scroll, `Esc` quits. When piped, all the tables are drawn.
 
