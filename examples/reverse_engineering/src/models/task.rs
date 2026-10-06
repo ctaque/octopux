@@ -116,20 +116,20 @@
     impl Task {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The timeentries of the task, paginated
-        async fn timeentries(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::timeentry::Timeentry>> {
-            crate::task_timeentries::resolve(ctx, self.id, offset, limit).await
+        async fn timeentries(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::timeentry::Timeentry>> {
+            super::task_timeentries::resolve(ctx, self.id, offset, limit).await
         }
         /// The taskcomments of the task, paginated
-        async fn taskcomments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::taskcomment::Taskcomment>> {
-            crate::task_taskcomments::resolve(ctx, self.id, offset, limit).await
+        async fn taskcomments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::taskcomment::Taskcomment>> {
+            super::task_taskcomments::resolve(ctx, self.id, offset, limit).await
         }
         /// The attachments of the task, paginated
-        async fn attachments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::attachment::Attachment>> {
-            crate::task_attachments::resolve(ctx, self.id, offset, limit).await
+        async fn attachments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::attachment::Attachment>> {
+            super::task_attachments::resolve(ctx, self.id, offset, limit).await
         }
         /// The taskattachments of the task, paginated
-        async fn taskattachments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::taskattachment::Taskattachment>> {
-            crate::task_taskattachments::resolve(ctx, self.id, offset, limit).await
+        async fn taskattachments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::taskattachment::Taskattachment>> {
+            super::task_taskattachments::resolve(ctx, self.id, offset, limit).await
         }
     }
 

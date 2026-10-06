@@ -107,8 +107,8 @@
     impl Leavetype {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The leaverequests of the leavetype, paginated
-        async fn leaverequests(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::leaverequest::Leaverequest>> {
-            crate::leavetype_leaverequests::resolve(ctx, self.id, offset, limit).await
+        async fn leaverequests(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::leaverequest::Leaverequest>> {
+            super::leavetype_leaverequests::resolve(ctx, self.id, offset, limit).await
         }
     }
 

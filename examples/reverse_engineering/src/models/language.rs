@@ -107,8 +107,8 @@
     impl Language {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The accounts of the language, paginated
-        async fn accounts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::account::Account>> {
-            crate::language_accounts::resolve(ctx, self.id, offset, limit).await
+        async fn accounts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::account::Account>> {
+            super::language_accounts::resolve(ctx, self.id, offset, limit).await
         }
     }
 

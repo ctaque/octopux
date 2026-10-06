@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::wishlist::{Wishlist, Id};
-    use crate::productvariant::Productvariant;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::wishlist::{Wishlist, Id};
+    use super::productvariant::Productvariant;
     use serde::Deserialize;
     use octopux::{
         HasMany,

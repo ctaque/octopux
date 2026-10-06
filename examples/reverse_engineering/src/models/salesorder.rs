@@ -122,28 +122,28 @@
     impl Salesorder {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The shipments of the salesorder, paginated
-        async fn shipments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::shipment::Shipment>> {
-            crate::salesorder_shipments::resolve(ctx, self.id, offset, limit).await
+        async fn shipments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::shipment::Shipment>> {
+            super::salesorder_shipments::resolve(ctx, self.id, offset, limit).await
         }
         /// The salesorderlines of the salesorder, paginated
-        async fn salesorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::salesorderline::Salesorderline>> {
-            crate::salesorder_salesorderlines::resolve(ctx, self.id, offset, limit).await
+        async fn salesorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::salesorderline::Salesorderline>> {
+            super::salesorder_salesorderlines::resolve(ctx, self.id, offset, limit).await
         }
         /// The returnrequests of the salesorder, paginated
-        async fn returnrequests(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::returnrequest::Returnrequest>> {
-            crate::salesorder_returnrequests::resolve(ctx, self.id, offset, limit).await
+        async fn returnrequests(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::returnrequest::Returnrequest>> {
+            super::salesorder_returnrequests::resolve(ctx, self.id, offset, limit).await
         }
         /// The coupons of the salesorder, paginated
-        async fn coupons(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::coupon::Coupon>> {
-            crate::salesorder_coupons::resolve(ctx, self.id, offset, limit).await
+        async fn coupons(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::coupon::Coupon>> {
+            super::salesorder_coupons::resolve(ctx, self.id, offset, limit).await
         }
         /// The ordercoupons of the salesorder, paginated
-        async fn ordercoupons(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ordercoupon::Ordercoupon>> {
-            crate::salesorder_ordercoupons::resolve(ctx, self.id, offset, limit).await
+        async fn ordercoupons(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ordercoupon::Ordercoupon>> {
+            super::salesorder_ordercoupons::resolve(ctx, self.id, offset, limit).await
         }
         /// The invoices of the salesorder, paginated
-        async fn invoices(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::invoice::Invoice>> {
-            crate::salesorder_invoices::resolve(ctx, self.id, offset, limit).await
+        async fn invoices(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::invoice::Invoice>> {
+            super::salesorder_invoices::resolve(ctx, self.id, offset, limit).await
         }
     }
 

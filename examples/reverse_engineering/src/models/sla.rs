@@ -107,12 +107,12 @@
     impl Sla {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The tickets of the sla, paginated
-        async fn tickets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ticket::Ticket>> {
-            crate::sla_tickets::resolve(ctx, self.id, offset, limit).await
+        async fn tickets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ticket::Ticket>> {
+            super::sla_tickets::resolve(ctx, self.id, offset, limit).await
         }
         /// The ticketslas of the sla, paginated
-        async fn ticketslas(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ticketsla::Ticketsla>> {
-            crate::sla_ticketslas::resolve(ctx, self.id, offset, limit).await
+        async fn ticketslas(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ticketsla::Ticketsla>> {
+            super::sla_ticketslas::resolve(ctx, self.id, offset, limit).await
         }
     }
 

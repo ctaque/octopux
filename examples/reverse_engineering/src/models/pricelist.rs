@@ -107,8 +107,8 @@
     impl Pricelist {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The pricelistitems of the pricelist, paginated
-        async fn pricelistitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::pricelistitem::Pricelistitem>> {
-            crate::pricelist_pricelistitems::resolve(ctx, self.id, offset, limit).await
+        async fn pricelistitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::pricelistitem::Pricelistitem>> {
+            super::pricelist_pricelistitems::resolve(ctx, self.id, offset, limit).await
         }
     }
 

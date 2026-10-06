@@ -114,12 +114,12 @@
     impl Campaign {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The leads of the campaign, paginated
-        async fn leads(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::lead::Lead>> {
-            crate::campaign_leads::resolve(ctx, self.id, offset, limit).await
+        async fn leads(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::lead::Lead>> {
+            super::campaign_leads::resolve(ctx, self.id, offset, limit).await
         }
         /// The campaignchannels of the campaign, paginated
-        async fn campaignchannels(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::campaignchannel::Campaignchannel>> {
-            crate::campaign_campaignchannels::resolve(ctx, self.id, offset, limit).await
+        async fn campaignchannels(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::campaignchannel::Campaignchannel>> {
+            super::campaign_campaignchannels::resolve(ctx, self.id, offset, limit).await
         }
     }
 

@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::budget::{Budget, Id};
-    use crate::expense::Expense;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::budget::{Budget, Id};
+    use super::expense::Expense;
     use serde::Deserialize;
     use octopux::{
         HasMany,

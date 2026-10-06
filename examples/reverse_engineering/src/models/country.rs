@@ -107,20 +107,20 @@
     impl Country {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The taxrates of the country, paginated
-        async fn taxrates(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::taxrate::Taxrate>> {
-            crate::country_taxrates::resolve(ctx, self.id, offset, limit).await
+        async fn taxrates(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::taxrate::Taxrate>> {
+            super::country_taxrates::resolve(ctx, self.id, offset, limit).await
         }
         /// The suppliers of the country, paginated
-        async fn suppliers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::supplier::Supplier>> {
-            crate::country_suppliers::resolve(ctx, self.id, offset, limit).await
+        async fn suppliers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::supplier::Supplier>> {
+            super::country_suppliers::resolve(ctx, self.id, offset, limit).await
         }
         /// The regions of the country, paginated
-        async fn regions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::region::Region>> {
-            crate::country_regions::resolve(ctx, self.id, offset, limit).await
+        async fn regions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::region::Region>> {
+            super::country_regions::resolve(ctx, self.id, offset, limit).await
         }
         /// The companies of the country, paginated
-        async fn companies(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::company::Company>> {
-            crate::country_companies::resolve(ctx, self.id, offset, limit).await
+        async fn companies(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::company::Company>> {
+            super::country_companies::resolve(ctx, self.id, offset, limit).await
         }
     }
 

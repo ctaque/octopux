@@ -110,20 +110,20 @@
     impl Department {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The teams of the department, paginated
-        async fn teams(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::team::Team>> {
-            crate::department_teams::resolve(ctx, self.id, offset, limit).await
+        async fn teams(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::team::Team>> {
+            super::department_teams::resolve(ctx, self.id, offset, limit).await
         }
         /// The employees of the department, paginated
-        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::employee::Employee>> {
-            crate::department_employees::resolve(ctx, self.id, offset, limit).await
+        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::employee::Employee>> {
+            super::department_employees::resolve(ctx, self.id, offset, limit).await
         }
         /// The departments of the department, paginated
-        async fn departments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::department::Department>> {
-            crate::department_departments::resolve(ctx, self.id, offset, limit).await
+        async fn departments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::department::Department>> {
+            super::department_departments::resolve(ctx, self.id, offset, limit).await
         }
         /// The budgets of the department, paginated
-        async fn budgets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::budget::Budget>> {
-            crate::department_budgets::resolve(ctx, self.id, offset, limit).await
+        async fn budgets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::budget::Budget>> {
+            super::department_budgets::resolve(ctx, self.id, offset, limit).await
         }
     }
 

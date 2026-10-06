@@ -116,12 +116,12 @@
     impl Purchaseorder {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The purchaseorderlines of the purchaseorder, paginated
-        async fn purchaseorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::purchaseorderline::Purchaseorderline>> {
-            crate::purchaseorder_purchaseorderlines::resolve(ctx, self.id, offset, limit).await
+        async fn purchaseorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::purchaseorderline::Purchaseorderline>> {
+            super::purchaseorder_purchaseorderlines::resolve(ctx, self.id, offset, limit).await
         }
         /// The goodsreceipts of the purchaseorder, paginated
-        async fn goodsreceipts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::goodsreceipt::Goodsreceipt>> {
-            crate::purchaseorder_goodsreceipts::resolve(ctx, self.id, offset, limit).await
+        async fn goodsreceipts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::goodsreceipt::Goodsreceipt>> {
+            super::purchaseorder_goodsreceipts::resolve(ctx, self.id, offset, limit).await
         }
     }
 

@@ -107,20 +107,20 @@
     impl Role {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The permissions of the role, paginated
-        async fn permissions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::permission::Permission>> {
-            crate::role_permissions::resolve(ctx, self.id, offset, limit).await
+        async fn permissions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::permission::Permission>> {
+            super::role_permissions::resolve(ctx, self.id, offset, limit).await
         }
         /// The rolepermissions of the role, paginated
-        async fn rolepermissions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::rolepermission::Rolepermission>> {
-            crate::role_rolepermissions::resolve(ctx, self.id, offset, limit).await
+        async fn rolepermissions(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::rolepermission::Rolepermission>> {
+            super::role_rolepermissions::resolve(ctx, self.id, offset, limit).await
         }
         /// The accounts of the role, paginated
-        async fn accounts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::account::Account>> {
-            crate::role_accounts::resolve(ctx, self.id, offset, limit).await
+        async fn accounts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::account::Account>> {
+            super::role_accounts::resolve(ctx, self.id, offset, limit).await
         }
         /// The accountroles of the role, paginated
-        async fn accountroles(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::accountrole::Accountrole>> {
-            crate::role_accountroles::resolve(ctx, self.id, offset, limit).await
+        async fn accountroles(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::accountrole::Accountrole>> {
+            super::role_accountroles::resolve(ctx, self.id, offset, limit).await
         }
     }
 

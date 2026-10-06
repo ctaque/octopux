@@ -110,8 +110,8 @@
     impl Taxrate {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The salesorderlines of the taxrate, paginated
-        async fn salesorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::salesorderline::Salesorderline>> {
-            crate::taxrate_salesorderlines::resolve(ctx, self.id, offset, limit).await
+        async fn salesorderlines(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::salesorderline::Salesorderline>> {
+            super::taxrate_salesorderlines::resolve(ctx, self.id, offset, limit).await
         }
     }
 

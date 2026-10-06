@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::team::{Team, Id};
-    use crate::teammember::Teammember;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::team::{Team, Id};
+    use super::teammember::Teammember;
     use serde::Deserialize;
     use octopux::{
         HasMany,

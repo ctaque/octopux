@@ -107,8 +107,8 @@
     impl Skill {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The employeeskills of the skill, paginated
-        async fn employeeskills(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::employeeskill::Employeeskill>> {
-            crate::skill_employeeskills::resolve(ctx, self.id, offset, limit).await
+        async fn employeeskills(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::employeeskill::Employeeskill>> {
+            super::skill_employeeskills::resolve(ctx, self.id, offset, limit).await
         }
     }
 

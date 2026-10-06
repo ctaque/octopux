@@ -116,16 +116,16 @@
     impl Ticket {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The slas of the ticket, paginated
-        async fn slas(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::sla::Sla>> {
-            crate::ticket_slas::resolve(ctx, self.id, offset, limit).await
+        async fn slas(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::sla::Sla>> {
+            super::ticket_slas::resolve(ctx, self.id, offset, limit).await
         }
         /// The ticketslas of the ticket, paginated
-        async fn ticketslas(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ticketsla::Ticketsla>> {
-            crate::ticket_ticketslas::resolve(ctx, self.id, offset, limit).await
+        async fn ticketslas(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ticketsla::Ticketsla>> {
+            super::ticket_ticketslas::resolve(ctx, self.id, offset, limit).await
         }
         /// The ticketmessages of the ticket, paginated
-        async fn ticketmessages(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ticketmessage::Ticketmessage>> {
-            crate::ticket_ticketmessages::resolve(ctx, self.id, offset, limit).await
+        async fn ticketmessages(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ticketmessage::Ticketmessage>> {
+            super::ticket_ticketmessages::resolve(ctx, self.id, offset, limit).await
         }
     }
 

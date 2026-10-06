@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::ledgeraccount::{Ledgeraccount, Id};
-    use crate::journalline::Journalline;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::ledgeraccount::{Ledgeraccount, Id};
+    use super::journalline::Journalline;
     use serde::Deserialize;
     use octopux::{
         HasMany,

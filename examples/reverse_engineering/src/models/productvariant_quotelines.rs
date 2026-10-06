@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::productvariant::{Productvariant, Id};
-    use crate::quoteline::Quoteline;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::productvariant::{Productvariant, Id};
+    use super::quoteline::Quoteline;
     use serde::Deserialize;
     use octopux::{
         HasMany,

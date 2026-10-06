@@ -1,0 +1,46 @@
+title: octopux
+description: Generate JSON CRUD endpoints for Actix Web from your structs.
+theme: just-the-docs
+
+url: https://ctaque.github.io
+baseurl: /octopux
+permalink: pretty
+
+logo: /assets/images/logo.webp
+color_scheme: light 
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  GitHub: https://github.com/ctaque/octopux
+  crates.io: https://crates.io/crates/octopux
+aux_links_new_tab: true
+
+gh_edit_link: true
+gh_edit_link_text: Edit this page on GitHub
+gh_edit_repository: https://github.com/ctaque/octopux
+gh_edit_branch: main
+gh_edit_source: docs
+gh_edit_view_mode: tree
+
+back_to_top: true
+back_to_top_text: Back to top
+
+callouts:
+  tip:
+    title: Tip
+    color: green
+  warning:
+    title: Warning
+    color: yellow
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default

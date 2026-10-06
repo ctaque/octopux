@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::salesorderline::{Salesorderline, Id};
-    use crate::returnitem::Returnitem;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::salesorderline::{Salesorderline, Id};
+    use super::returnitem::Returnitem;
     use serde::Deserialize;
     use octopux::{
         HasMany,

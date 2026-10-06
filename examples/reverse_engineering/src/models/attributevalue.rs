@@ -107,12 +107,12 @@
     impl Attributevalue {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The productvariants of the attributevalue, paginated
-        async fn productvariants(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::productvariant::Productvariant>> {
-            crate::attributevalue_productvariants::resolve(ctx, self.id, offset, limit).await
+        async fn productvariants(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::productvariant::Productvariant>> {
+            super::attributevalue_productvariants::resolve(ctx, self.id, offset, limit).await
         }
         /// The variantattributes of the attributevalue, paginated
-        async fn variantattributes(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::variantattribute::Variantattribute>> {
-            crate::attributevalue_variantattributes::resolve(ctx, self.id, offset, limit).await
+        async fn variantattributes(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::variantattribute::Variantattribute>> {
+            super::attributevalue_variantattributes::resolve(ctx, self.id, offset, limit).await
         }
     }
 

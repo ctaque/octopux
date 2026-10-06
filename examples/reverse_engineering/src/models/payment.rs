@@ -113,8 +113,8 @@
     impl Payment {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The refunds of the payment, paginated
-        async fn refunds(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::refund::Refund>> {
-            crate::payment_refunds::resolve(ctx, self.id, offset, limit).await
+        async fn refunds(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::refund::Refund>> {
+            super::payment_refunds::resolve(ctx, self.id, offset, limit).await
         }
     }
 

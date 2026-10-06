@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::fiscalyear::{Fiscalyear, Id};
-    use crate::budget::Budget;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::fiscalyear::{Fiscalyear, Id};
+    use super::budget::Budget;
     use serde::Deserialize;
     use octopux::{
         HasMany,

@@ -110,16 +110,16 @@
     impl Currency {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The salesorders of the currency, paginated
-        async fn salesorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::salesorder::Salesorder>> {
-            crate::currency_salesorders::resolve(ctx, self.id, offset, limit).await
+        async fn salesorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::salesorder::Salesorder>> {
+            super::currency_salesorders::resolve(ctx, self.id, offset, limit).await
         }
         /// The pricelists of the currency, paginated
-        async fn pricelists(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::pricelist::Pricelist>> {
-            crate::currency_pricelists::resolve(ctx, self.id, offset, limit).await
+        async fn pricelists(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::pricelist::Pricelist>> {
+            super::currency_pricelists::resolve(ctx, self.id, offset, limit).await
         }
         /// The companies of the currency, paginated
-        async fn companies(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::company::Company>> {
-            crate::currency_companies::resolve(ctx, self.id, offset, limit).await
+        async fn companies(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::company::Company>> {
+            super::currency_companies::resolve(ctx, self.id, offset, limit).await
         }
     }
 

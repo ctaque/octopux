@@ -107,8 +107,8 @@
     impl Attribute {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The attributevalues of the attribute, paginated
-        async fn attributevalues(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::attributevalue::Attributevalue>> {
-            crate::attribute_attributevalues::resolve(ctx, self.id, offset, limit).await
+        async fn attributevalues(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::attributevalue::Attributevalue>> {
+            super::attribute_attributevalues::resolve(ctx, self.id, offset, limit).await
         }
     }
 

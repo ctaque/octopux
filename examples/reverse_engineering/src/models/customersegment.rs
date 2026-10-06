@@ -107,12 +107,12 @@
     impl Customersegment {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The customers of the customersegment, paginated
-        async fn customers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::customer::Customer>> {
-            crate::customersegment_customers::resolve(ctx, self.id, offset, limit).await
+        async fn customers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::customer::Customer>> {
+            super::customersegment_customers::resolve(ctx, self.id, offset, limit).await
         }
         /// The customersegmentmembers of the customersegment, paginated
-        async fn customersegmentmembers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::customersegmentmember::Customersegmentmember>> {
-            crate::customersegment_customersegmentmembers::resolve(ctx, self.id, offset, limit).await
+        async fn customersegmentmembers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::customersegmentmember::Customersegmentmember>> {
+            super::customersegment_customersegmentmembers::resolve(ctx, self.id, offset, limit).await
         }
     }
 

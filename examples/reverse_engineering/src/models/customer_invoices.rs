@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::customer::{Customer, Id};
-    use crate::invoice::Invoice;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::customer::{Customer, Id};
+    use super::invoice::Invoice;
     use serde::Deserialize;
     use octopux::{
         HasMany,

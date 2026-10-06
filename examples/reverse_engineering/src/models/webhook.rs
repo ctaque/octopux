@@ -110,8 +110,8 @@
     impl Webhook {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The webhookdeliveries of the webhook, paginated
-        async fn webhookdeliveries(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::webhookdelivery::Webhookdelivery>> {
-            crate::webhook_webhookdeliveries::resolve(ctx, self.id, offset, limit).await
+        async fn webhookdeliveries(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::webhookdelivery::Webhookdelivery>> {
+            super::webhook_webhookdeliveries::resolve(ctx, self.id, offset, limit).await
         }
     }
 

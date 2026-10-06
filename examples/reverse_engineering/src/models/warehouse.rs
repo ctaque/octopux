@@ -110,24 +110,24 @@
     impl Warehouse {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The storagelocations of the warehouse, paginated
-        async fn storagelocations(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::storagelocation::Storagelocation>> {
-            crate::warehouse_storagelocations::resolve(ctx, self.id, offset, limit).await
+        async fn storagelocations(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::storagelocation::Storagelocation>> {
+            super::warehouse_storagelocations::resolve(ctx, self.id, offset, limit).await
         }
         /// The stockmovements_by_to_warehouse of the warehouse, paginated
-        async fn stockmovements_by_to_warehouse(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::stockmovement::Stockmovement>> {
-            crate::warehouse_stockmovements_by_to_warehouse::resolve(ctx, self.id, offset, limit).await
+        async fn stockmovements_by_to_warehouse(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::stockmovement::Stockmovement>> {
+            super::warehouse_stockmovements_by_to_warehouse::resolve(ctx, self.id, offset, limit).await
         }
         /// The stockmovements of the warehouse, paginated
-        async fn stockmovements(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::stockmovement::Stockmovement>> {
-            crate::warehouse_stockmovements::resolve(ctx, self.id, offset, limit).await
+        async fn stockmovements(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::stockmovement::Stockmovement>> {
+            super::warehouse_stockmovements::resolve(ctx, self.id, offset, limit).await
         }
         /// The shipments of the warehouse, paginated
-        async fn shipments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::shipment::Shipment>> {
-            crate::warehouse_shipments::resolve(ctx, self.id, offset, limit).await
+        async fn shipments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::shipment::Shipment>> {
+            super::warehouse_shipments::resolve(ctx, self.id, offset, limit).await
         }
         /// The purchaseorders of the warehouse, paginated
-        async fn purchaseorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::purchaseorder::Purchaseorder>> {
-            crate::warehouse_purchaseorders::resolve(ctx, self.id, offset, limit).await
+        async fn purchaseorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::purchaseorder::Purchaseorder>> {
+            super::warehouse_purchaseorders::resolve(ctx, self.id, offset, limit).await
         }
     }
 

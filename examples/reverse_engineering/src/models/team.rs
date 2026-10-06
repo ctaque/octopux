@@ -110,12 +110,12 @@
     impl Team {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The employees of the team, paginated
-        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::employee::Employee>> {
-            crate::team_employees::resolve(ctx, self.id, offset, limit).await
+        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::employee::Employee>> {
+            super::team_employees::resolve(ctx, self.id, offset, limit).await
         }
         /// The teammembers of the team, paginated
-        async fn teammembers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::teammember::Teammember>> {
-            crate::team_teammembers::resolve(ctx, self.id, offset, limit).await
+        async fn teammembers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::teammember::Teammember>> {
+            super::team_teammembers::resolve(ctx, self.id, offset, limit).await
         }
     }
 

@@ -107,8 +107,8 @@
     impl Jobtitle {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The employees of the jobtitle, paginated
-        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::employee::Employee>> {
-            crate::jobtitle_employees::resolve(ctx, self.id, offset, limit).await
+        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::employee::Employee>> {
+            super::jobtitle_employees::resolve(ctx, self.id, offset, limit).await
         }
     }
 

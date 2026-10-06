@@ -110,8 +110,8 @@
     impl City {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The addresses of the city, paginated
-        async fn addresses(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::address::Address>> {
-            crate::city_addresses::resolve(ctx, self.id, offset, limit).await
+        async fn addresses(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::address::Address>> {
+            super::city_addresses::resolve(ctx, self.id, offset, limit).await
         }
     }
 

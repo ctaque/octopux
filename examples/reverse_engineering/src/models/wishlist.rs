@@ -107,12 +107,12 @@
     impl Wishlist {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The productvariants of the wishlist, paginated
-        async fn productvariants(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::productvariant::Productvariant>> {
-            crate::wishlist_productvariants::resolve(ctx, self.id, offset, limit).await
+        async fn productvariants(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::productvariant::Productvariant>> {
+            super::wishlist_productvariants::resolve(ctx, self.id, offset, limit).await
         }
         /// The wishlistitems of the wishlist, paginated
-        async fn wishlistitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::wishlistitem::Wishlistitem>> {
-            crate::wishlist_wishlistitems::resolve(ctx, self.id, offset, limit).await
+        async fn wishlistitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::wishlistitem::Wishlistitem>> {
+            super::wishlist_wishlistitems::resolve(ctx, self.id, offset, limit).await
         }
     }
 

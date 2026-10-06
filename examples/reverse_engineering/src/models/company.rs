@@ -113,20 +113,20 @@
     impl Company {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The projects of the company, paginated
-        async fn projects(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::project::Project>> {
-            crate::company_projects::resolve(ctx, self.id, offset, limit).await
+        async fn projects(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::project::Project>> {
+            super::company_projects::resolve(ctx, self.id, offset, limit).await
         }
         /// The fiscalyears of the company, paginated
-        async fn fiscalyears(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::fiscalyear::Fiscalyear>> {
-            crate::company_fiscalyears::resolve(ctx, self.id, offset, limit).await
+        async fn fiscalyears(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::fiscalyear::Fiscalyear>> {
+            super::company_fiscalyears::resolve(ctx, self.id, offset, limit).await
         }
         /// The departments of the company, paginated
-        async fn departments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::department::Department>> {
-            crate::company_departments::resolve(ctx, self.id, offset, limit).await
+        async fn departments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::department::Department>> {
+            super::company_departments::resolve(ctx, self.id, offset, limit).await
         }
         /// The customers of the company, paginated
-        async fn customers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::customer::Customer>> {
-            crate::company_customers::resolve(ctx, self.id, offset, limit).await
+        async fn customers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::customer::Customer>> {
+            super::company_customers::resolve(ctx, self.id, offset, limit).await
         }
     }
 

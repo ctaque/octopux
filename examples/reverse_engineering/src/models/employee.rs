@@ -122,56 +122,56 @@
     impl Employee {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The timeentries of the employee, paginated
-        async fn timeentries(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::timeentry::Timeentry>> {
-            crate::employee_timeentries::resolve(ctx, self.id, offset, limit).await
+        async fn timeentries(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::timeentry::Timeentry>> {
+            super::employee_timeentries::resolve(ctx, self.id, offset, limit).await
         }
         /// The tickets of the employee, paginated
-        async fn tickets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ticket::Ticket>> {
-            crate::employee_tickets::resolve(ctx, self.id, offset, limit).await
+        async fn tickets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ticket::Ticket>> {
+            super::employee_tickets::resolve(ctx, self.id, offset, limit).await
         }
         /// The teams_by_employee of the employee, paginated
-        async fn teams_by_employee(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::team::Team>> {
-            crate::employee_teams_by_employee::resolve(ctx, self.id, offset, limit).await
+        async fn teams_by_employee(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::team::Team>> {
+            super::employee_teams_by_employee::resolve(ctx, self.id, offset, limit).await
         }
         /// The teammembers of the employee, paginated
-        async fn teammembers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::teammember::Teammember>> {
-            crate::employee_teammembers::resolve(ctx, self.id, offset, limit).await
+        async fn teammembers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::teammember::Teammember>> {
+            super::employee_teammembers::resolve(ctx, self.id, offset, limit).await
         }
         /// The teams of the employee, paginated
-        async fn teams(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::team::Team>> {
-            crate::employee_teams::resolve(ctx, self.id, offset, limit).await
+        async fn teams(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::team::Team>> {
+            super::employee_teams::resolve(ctx, self.id, offset, limit).await
         }
         /// The tasks of the employee, paginated
-        async fn tasks(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::task::Task>> {
-            crate::employee_tasks::resolve(ctx, self.id, offset, limit).await
+        async fn tasks(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::task::Task>> {
+            super::employee_tasks::resolve(ctx, self.id, offset, limit).await
         }
         /// The payslips of the employee, paginated
-        async fn payslips(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::payslip::Payslip>> {
-            crate::employee_payslips::resolve(ctx, self.id, offset, limit).await
+        async fn payslips(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::payslip::Payslip>> {
+            super::employee_payslips::resolve(ctx, self.id, offset, limit).await
         }
         /// The leaverequests of the employee, paginated
-        async fn leaverequests(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::leaverequest::Leaverequest>> {
-            crate::employee_leaverequests::resolve(ctx, self.id, offset, limit).await
+        async fn leaverequests(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::leaverequest::Leaverequest>> {
+            super::employee_leaverequests::resolve(ctx, self.id, offset, limit).await
         }
         /// The leads of the employee, paginated
-        async fn leads(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::lead::Lead>> {
-            crate::employee_leads::resolve(ctx, self.id, offset, limit).await
+        async fn leads(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::lead::Lead>> {
+            super::employee_leads::resolve(ctx, self.id, offset, limit).await
         }
         /// The expenses of the employee, paginated
-        async fn expenses(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::expense::Expense>> {
-            crate::employee_expenses::resolve(ctx, self.id, offset, limit).await
+        async fn expenses(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::expense::Expense>> {
+            super::employee_expenses::resolve(ctx, self.id, offset, limit).await
         }
         /// The employeeskills of the employee, paginated
-        async fn employeeskills(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::employeeskill::Employeeskill>> {
-            crate::employee_employeeskills::resolve(ctx, self.id, offset, limit).await
+        async fn employeeskills(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::employeeskill::Employeeskill>> {
+            super::employee_employeeskills::resolve(ctx, self.id, offset, limit).await
         }
         /// The employees of the employee, paginated
-        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::employee::Employee>> {
-            crate::employee_employees::resolve(ctx, self.id, offset, limit).await
+        async fn employees(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::employee::Employee>> {
+            super::employee_employees::resolve(ctx, self.id, offset, limit).await
         }
         /// The contracts of the employee, paginated
-        async fn contracts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::contract::Contract>> {
-            crate::employee_contracts::resolve(ctx, self.id, offset, limit).await
+        async fn contracts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::contract::Contract>> {
+            super::employee_contracts::resolve(ctx, self.id, offset, limit).await
         }
     }
 

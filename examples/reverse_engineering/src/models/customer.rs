@@ -113,48 +113,48 @@
     impl Customer {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The wishlists of the customer, paginated
-        async fn wishlists(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::wishlist::Wishlist>> {
-            crate::customer_wishlists::resolve(ctx, self.id, offset, limit).await
+        async fn wishlists(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::wishlist::Wishlist>> {
+            super::customer_wishlists::resolve(ctx, self.id, offset, limit).await
         }
         /// The tickets of the customer, paginated
-        async fn tickets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::ticket::Ticket>> {
-            crate::customer_tickets::resolve(ctx, self.id, offset, limit).await
+        async fn tickets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::ticket::Ticket>> {
+            super::customer_tickets::resolve(ctx, self.id, offset, limit).await
         }
         /// The salesorders of the customer, paginated
-        async fn salesorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::salesorder::Salesorder>> {
-            crate::customer_salesorders::resolve(ctx, self.id, offset, limit).await
+        async fn salesorders(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::salesorder::Salesorder>> {
+            super::customer_salesorders::resolve(ctx, self.id, offset, limit).await
         }
         /// The reviews of the customer, paginated
-        async fn reviews(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::review::Review>> {
-            crate::customer_reviews::resolve(ctx, self.id, offset, limit).await
+        async fn reviews(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::review::Review>> {
+            super::customer_reviews::resolve(ctx, self.id, offset, limit).await
         }
         /// The projects of the customer, paginated
-        async fn projects(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::project::Project>> {
-            crate::customer_projects::resolve(ctx, self.id, offset, limit).await
+        async fn projects(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::project::Project>> {
+            super::customer_projects::resolve(ctx, self.id, offset, limit).await
         }
         /// The opportunities of the customer, paginated
-        async fn opportunities(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::opportunity::Opportunity>> {
-            crate::customer_opportunities::resolve(ctx, self.id, offset, limit).await
+        async fn opportunities(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::opportunity::Opportunity>> {
+            super::customer_opportunities::resolve(ctx, self.id, offset, limit).await
         }
         /// The invoices of the customer, paginated
-        async fn invoices(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::invoice::Invoice>> {
-            crate::customer_invoices::resolve(ctx, self.id, offset, limit).await
+        async fn invoices(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::invoice::Invoice>> {
+            super::customer_invoices::resolve(ctx, self.id, offset, limit).await
         }
         /// The customersegments of the customer, paginated
-        async fn customersegments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::customersegment::Customersegment>> {
-            crate::customer_customersegments::resolve(ctx, self.id, offset, limit).await
+        async fn customersegments(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::customersegment::Customersegment>> {
+            super::customer_customersegments::resolve(ctx, self.id, offset, limit).await
         }
         /// The customersegmentmembers of the customer, paginated
-        async fn customersegmentmembers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::customersegmentmember::Customersegmentmember>> {
-            crate::customer_customersegmentmembers::resolve(ctx, self.id, offset, limit).await
+        async fn customersegmentmembers(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::customersegmentmember::Customersegmentmember>> {
+            super::customer_customersegmentmembers::resolve(ctx, self.id, offset, limit).await
         }
         /// The customeraddresses of the customer, paginated
-        async fn customeraddresses(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::customeraddress::Customeraddress>> {
-            crate::customer_customeraddresses::resolve(ctx, self.id, offset, limit).await
+        async fn customeraddresses(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::customeraddress::Customeraddress>> {
+            super::customer_customeraddresses::resolve(ctx, self.id, offset, limit).await
         }
         /// The carts of the customer, paginated
-        async fn carts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::cart::Cart>> {
-            crate::customer_carts::resolve(ctx, self.id, offset, limit).await
+        async fn carts(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::cart::Cart>> {
+            super::customer_carts::resolve(ctx, self.id, offset, limit).await
         }
     }
 

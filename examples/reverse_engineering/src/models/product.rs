@@ -119,24 +119,24 @@
     impl Product {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The reviews of the product, paginated
-        async fn reviews(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::review::Review>> {
-            crate::product_reviews::resolve(ctx, self.id, offset, limit).await
+        async fn reviews(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::review::Review>> {
+            super::product_reviews::resolve(ctx, self.id, offset, limit).await
         }
         /// The productvariants of the product, paginated
-        async fn productvariants(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::productvariant::Productvariant>> {
-            crate::product_productvariants::resolve(ctx, self.id, offset, limit).await
+        async fn productvariants(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::productvariant::Productvariant>> {
+            super::product_productvariants::resolve(ctx, self.id, offset, limit).await
         }
         /// The tags of the product, paginated
-        async fn tags(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::tag::Tag>> {
-            crate::product_tags::resolve(ctx, self.id, offset, limit).await
+        async fn tags(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::tag::Tag>> {
+            super::product_tags::resolve(ctx, self.id, offset, limit).await
         }
         /// The producttags of the product, paginated
-        async fn producttags(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::producttag::Producttag>> {
-            crate::product_producttags::resolve(ctx, self.id, offset, limit).await
+        async fn producttags(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::producttag::Producttag>> {
+            super::product_producttags::resolve(ctx, self.id, offset, limit).await
         }
         /// The productimages of the product, paginated
-        async fn productimages(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::productimage::Productimage>> {
-            crate::product_productimages::resolve(ctx, self.id, offset, limit).await
+        async fn productimages(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::productimage::Productimage>> {
+            super::product_productimages::resolve(ctx, self.id, offset, limit).await
         }
     }
 

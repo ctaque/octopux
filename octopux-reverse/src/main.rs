@@ -1,6 +1,6 @@
 // Reverse engineers a database into octopux models and relations: its schema is read,
-// then piped to `octopux generate-model --fields` and `octopux generate-relation`
 mod plan;
+// then piped to `octopux generate-model --fields` and `octopux generate-relation`
 mod schema;
 
 use plan::{Command, Options, Plan};
@@ -24,19 +24,9 @@ struct Cli {
     /// without --database-url. The migrations are applied to the --database-url database: use a throwaway one
     #[structopt(long = "migrations", parse(from_os_str))]
     migrations: Option<PathBuf>,
-    /// Reads a SQLite database, `--database-url` is a `sqlite:` one
-    #[structopt(long = "sqlite", conflicts_with_all = &["postgres", "mysql"])]
-    sqlite: bool,
-    /// Reads a PostgreSQL database, `--database-url` is a `postgres:` one
-    #[structopt(long = "postgres", conflicts_with = "mysql")]
-    postgres: bool,
-    /// Reads a MySQL (or MariaDB) database, `--database-url` is a `mysql:` one.
-    /// --migrations are then applied to it, there is no in-memory MySQL database
-    #[structopt(long = "mysql")]
-    mysql: bool,
     /// Reads the tables of this PostgreSQL schema instead of the current one (`public` by default),
-    /// --migrations are then applied to it, requires --postgres
-    #[structopt(long = "schema", requires = "postgres")]
+    /// --migrations are then applied to it, requires a `postgres:` --database-url
+    #[structopt(long = "schema")]
     schema: Option<String>,
     /// Only reads these tables, comma separated
     #[structopt(long = "tables", use_delimiter = true)]
@@ -77,24 +67,21 @@ fn main() {
 
 // The url must be one of the database of the --sqlite, --postgres or --mysql flag
 fn check_dialect(cli: &Cli) -> Result<(), String> {
-    let expected = match (cli.sqlite, cli.postgres, cli.mysql) {
-        (true, _, _) => Dialect::Sqlite,
-        (_, true, _) => Dialect::Postgres,
-        (_, _, true) => Dialect::Mysql,
-        _ => return Ok(()),
-    };
-    match cli.database_url.as_deref() {
-        Some(url) if Dialect::from_url(url) != Some(expected) => {
-            let scheme = url.split(':').next().unwrap_or_default();
-            Err(format!("{} reads a {} database, the url is a `{}:` one", expected.flag(), expected.name(), scheme))
-        }
-        // the migrations of a server database are not applied to the in-memory SQLite one
-        None if expected != Dialect::Sqlite => Err(format!(
-            "{} needs DATABASE_URL or --database-url{}",
-            expected.flag(),
-            if cli.migrations.is_some() { ", a throwaway database to apply the migrations to" } else { "" }
+    let db_uri = cli
+        .database_url
+        .as_deref()
+        .ok_or_else(|| String::from("needs DATABASE_URL or --database-url"))?;
+
+    if cli.schema.is_some() && Dialect::from_url(db_uri) != Some(Dialect::Postgres) {
+        return Err(format!("--schema reads a PostgreSQL schema, the url is not a `postgres:` one: `{db_uri}`"));
+    }
+
+    match db_uri.split_once(':').map(|(scheme, _)| scheme) {
+        Some("sqlite" | "postgres" | "postgresql" | "mysql") => Ok(()),
+        Some(scheme) => Err(format!(
+            "unsupported database scheme `{scheme}` (expected sqlite, postgres or mysql)"
         )),
-        _ => Ok(()),
+        None => Err(format!("invalid DATABASE_URL: `{db_uri}`")),
     }
 }
 
@@ -214,8 +201,9 @@ mod tests {
 
     #[test]
     fn the_schema_requires_postgres() {
-        assert_eq!(check("octopux-reverse --postgres --schema app --database-url postgres://localhost/db"), Ok(()));
-        assert!(Cli::from_iter_safe(["octopux-reverse", "--schema", "app", "--database-url", "postgres://localhost/db"]).is_err());
-        assert!(Cli::from_iter_safe(["octopux-reverse", "--schema", "app", "--mysql"]).is_err());
+        assert_eq!(check("octopux-reverse --schema app --database-url postgres://localhost/db"), Ok(()));
+        assert_eq!(check("octopux-reverse --schema app --database-url postgresql://localhost/db"), Ok(()));
+        assert!(check("octopux-reverse --schema app --database-url mysql://localhost/db").is_err());
+        assert!(check("octopux-reverse --schema app --database-url sqlite::memory:").is_err());
     }
 }

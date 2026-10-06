@@ -32,8 +32,9 @@
 
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    use crate::journal::{Journal, Id};
-    use crate::journalentry::Journalentry;
+    // The models and the relations are sibling modules, generated in the same folder
+    use super::journal::{Journal, Id};
+    use super::journalentry::Journalentry;
     use serde::Deserialize;
     use octopux::{
         HasMany,

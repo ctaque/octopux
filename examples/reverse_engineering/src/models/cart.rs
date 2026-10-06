@@ -107,8 +107,8 @@
     impl Cart {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The cartitems of the cart, paginated
-        async fn cartitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::cartitem::Cartitem>> {
-            crate::cart_cartitems::resolve(ctx, self.id, offset, limit).await
+        async fn cartitems(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::cartitem::Cartitem>> {
+            super::cart_cartitems::resolve(ctx, self.id, offset, limit).await
         }
     }
 

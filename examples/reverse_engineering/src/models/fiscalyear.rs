@@ -114,8 +114,8 @@
     impl Fiscalyear {
         // Relations generated with `octopux generate-relation --graphql`, inserted below
         /// The budgets of the fiscalyear, paginated
-        async fn budgets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<crate::budget::Budget>> {
-            crate::fiscalyear_budgets::resolve(ctx, self.id, offset, limit).await
+        async fn budgets(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::budget::Budget>> {
+            super::fiscalyear_budgets::resolve(ctx, self.id, offset, limit).await
         }
     }
 
