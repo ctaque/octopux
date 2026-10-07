@@ -2711,7 +2711,8 @@ fn add_relation_field(root: &Path, output: Option<&Path>, relation: &Relation) -
         }
         None => {
             println!(
-                "{}\n{}",
+                // blank lines around the field to insert, which starts with a line break
+                "{}\n\n{}\n",
                 warning(&format!("{} has no `#[ComplexObject]` of a model generated with --graphql, add this field to the `#[ComplexObject]` of {}:", path, relation.parent)),
                 relation_graphql_field(relation)
             );
