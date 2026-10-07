@@ -1,6 +1,7 @@
 // `SqlxFilter`: the `SqlxFilter` implementation of a list query, pushing a condition on a column
 // for each of its `Option` fields that is set. The column and the operator are read from the field name,
 // `price_gte` filters `price >= ...`, or from `#[sqlx_filter(column = "...", op = "...")]`.
+// The spatial operators of PostGIS, `intersects`, `within`, `contains` and `dwithin`, are only given by `op`.
 // The field marked `#[sqlx_filter(sort = "...")]` gives the `ORDER BY` clause, among the columns it lists,
 // and the one marked `#[sqlx_filter(sort_direction)]` the direction of its columns, `asc` or `desc`.
 use darling::{FromDeriveInput, FromField};
@@ -50,6 +51,17 @@ const OPERATORS: [(&str, &str); 7] = [
     ("lte", "<="),
     ("like", "LIKE"),
 ];
+
+// Spatial operators of PostGIS (postgres only, never read from a suffix): the column and the
+// geometry or the bounding box of the field, `ST_Intersects(location, $1)`
+const SPATIAL_OPERATORS: [(&str, &str); 3] = [
+    ("intersects", "ST_Intersects"),
+    ("within", "ST_Within"),
+    ("contains", "ST_Contains"),
+];
+
+// The distance operator, its field being a `postgis::Near`
+const DWITHIN: &str = "dwithin";
 
 // Pagination fields of the list query, read by `SqlxModel`
 const PAGINATION: [&str; 2] = ["offset", "limit"];
@@ -126,22 +138,44 @@ pub fn impl_sqlx_filter(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
             if field.op.is_some() { name.clone() } else { suffix_column.to_string() }
         });
         let op_name = field.op.clone().unwrap_or_else(|| suffix_op.to_string());
-        let op = operator(&op_name).ok_or_else(|| {
-            let names: Vec<&str> = OPERATORS.iter().map(|(n, _)| *n).collect();
-            syn::Error::new_spanned(ident, format!("unknown operator `{}`, use {}", op_name, names.join(", ")))
-        })?;
         if !is_column_name(&filter_column) {
             return Err(syn::Error::new_spanned(
                 ident,
                 format!("`{}` is not a valid column name, use only latin letters (a-z, A-Z), digits and `_`", filter_column),
             ));
         }
-        let condition = format!("{} {} ", filter_column, op);
+        let spatial = SPATIAL_OPERATORS.iter().find(|(n, _)| *n == op_name).map(|(_, function)| *function);
+        if (spatial.is_some() || op_name == DWITHIN) && database != Database::Postgres {
+            return Err(syn::Error::new_spanned(ident, format!("the spatial operator `{}` requires database = \"postgres\" and PostGIS", op_name)));
+        }
+        // the spatial conditions push their arguments with the `postgis` types of the fields
+        let condition = if let Some(function) = spatial {
+            let function = format!("{}({}, ", function, filter_column);
+            quote! {
+                qb.push(#function);
+                ::octopux::postgis::SpatialArgument::push_argument(value, qb);
+                qb.push(")");
+            }
+        } else if op_name == DWITHIN {
+            quote! { ::octopux::postgis::Near::push_dwithin(value, qb, #filter_column); }
+        } else {
+            let op = operator(&op_name).ok_or_else(|| {
+                let names: Vec<&str> = OPERATORS
+                    .iter()
+                    .map(|(n, _)| *n)
+                    .chain(SPATIAL_OPERATORS.iter().map(|(n, _)| *n))
+                    .chain([DWITHIN])
+                    .collect();
+                syn::Error::new_spanned(ident, format!("unknown operator `{}`, use {}", op_name, names.join(", ")))
+            })?;
+            let condition = format!("{} {} ", filter_column, op);
+            quote! { qb.push(#condition).push_bind(value); }
+        };
         filters.push(quote! {
             if let ::std::option::Option::Some(value) = &self.#ident {
                 qb.push(if *has_where { " AND " } else { " WHERE " });
                 *has_where = true;
-                qb.push(#condition).push_bind(value);
+                #condition
             }
         });
     }
@@ -361,5 +395,39 @@ mod tests {
             struct ListQuery { name: Option<String> }
         });
         assert!(unknown_db.contains("unknown database `oracle`"), "{}", unknown_db);
+    }
+
+    #[test]
+    fn spatial_operators_call_postgis() {
+        let out = expand(syn::parse_quote! {
+            #[sqlx_filter(database = "postgres")]
+            struct ListQuery {
+                #[sqlx_filter(column = "location", op = "within")]
+                bbox: Option<Bbox>,
+                #[sqlx_filter(op = "intersects")]
+                area: Option<Geometry>,
+                #[sqlx_filter(column = "zone", op = "contains")]
+                point: Option<Point>,
+                #[sqlx_filter(column = "location", op = "dwithin")]
+                near: Option<Near>,
+                // spatial operators are never read from a suffix
+                name_within: Option<String>,
+            }
+        });
+        assert!(out.contains("qb . push (\"ST_Within(location, \") ; :: octopux :: postgis :: SpatialArgument :: push_argument (value , qb) ; qb . push (\")\")"), "{}", out);
+        assert!(out.contains("\"ST_Intersects(area, \""), "{}", out);
+        assert!(out.contains("\"ST_Contains(zone, \""), "{}", out);
+        assert!(out.contains(":: octopux :: postgis :: Near :: push_dwithin (value , qb , \"location\")"), "{}", out);
+        assert!(out.contains("\"name_within = \""), "{}", out);
+        let sqlite = expand(syn::parse_quote! {
+            #[sqlx_filter(database = "sqlite")]
+            struct ListQuery { #[sqlx_filter(column = "location", op = "dwithin")] near: Option<Near> }
+        });
+        assert!(sqlite.starts_with("error: the spatial operator `dwithin` requires database = \"postgres\""), "{}", sqlite);
+        let unknown_op = expand(syn::parse_quote! {
+            #[sqlx_filter(database = "postgres")]
+            struct ListQuery { #[sqlx_filter(op = "overlaps")] area: Option<Geometry> }
+        });
+        assert!(unknown_op.contains("like, intersects, within, contains, dwithin"), "{}", unknown_op);
     }
 }

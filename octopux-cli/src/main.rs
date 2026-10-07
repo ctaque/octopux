@@ -595,8 +595,32 @@ const FIELD_TYPES: &[&str] = &[
     "String", "i32", "i64", "f64", "bool", "Option<String>", "DateTime<Utc>", "NaiveDateTime", "NaiveDate", "NaiveTime", "Vec<u8>",
 ];
 
-fn field_types_menu() -> String {
-    FIELD_TYPES
+// PostGIS geometries (octopux `postgis` feature), PostgreSQL only: the field types, written with
+// `use octopux::postgis;`, and their columns, in WGS 84 as the GeoJSON the geometries are sent as
+const POSTGIS_TYPES: &[(&str, &str)] = &[
+    ("postgis::Point", "geometry(Point, 4326)"),
+    ("postgis::LineString", "geometry(LineString, 4326)"),
+    ("postgis::Polygon", "geometry(Polygon, 4326)"),
+    ("postgis::MultiPoint", "geometry(MultiPoint, 4326)"),
+    ("postgis::MultiLineString", "geometry(MultiLineString, 4326)"),
+    ("postgis::MultiPolygon", "geometry(MultiPolygon, 4326)"),
+    ("postgis::GeometryCollection", "geometry(GeometryCollection, 4326)"),
+    ("postgis::Geometry", "geometry(Geometry, 4326)"),
+];
+
+// Whether a field type is a PostGIS geometry, `postgis::Point` or `Option<octopux::postgis::Point>`
+fn is_postgis_type(ty: &str) -> bool {
+    ty.contains("postgis::")
+}
+
+// The types of the menu, followed by the PostGIS geometries for PostgreSQL
+fn field_types(dialect: Option<Dialect>) -> Vec<&'static str> {
+    let postgis = POSTGIS_TYPES.iter().map(|(ty, _)| *ty).filter(|_| dialect == Some(Dialect::Postgres));
+    FIELD_TYPES.iter().copied().chain(postgis).collect()
+}
+
+fn field_types_menu(dialect: Option<Dialect>) -> String {
+    field_types(dialect)
         .iter()
         .enumerate()
         .map(|(i, ty)| format!("{} {}", magenta(&format!("{})", i + 1)), ty))
@@ -606,15 +630,15 @@ fn field_types_menu() -> String {
 
 // Resolves a type answer: empty for the default, a number from the menu, or any custom type,
 // a trailing `?` makes it optional (`3?` gives `Option<i64>`, `?` gives `Option<String>`)
-fn parse_field_type(answer: &str) -> Option<String> {
+fn parse_field_type(answer: &str, dialect: Option<Dialect>) -> Option<String> {
     if let Some(inner) = answer.strip_suffix('?') {
-        return parse_field_type(inner.trim()).map(|ty| if ty.starts_with("Option<") { ty } else { format!("Option<{}>", ty) });
+        return parse_field_type(inner.trim(), dialect).map(|ty| if ty.starts_with("Option<") { ty } else { format!("Option<{}>", ty) });
     }
     if answer.is_empty() {
         return Some(FIELD_TYPES[0].to_string());
     }
     match answer.parse::<usize>() {
-        Ok(n) => FIELD_TYPES.get(n.wrapping_sub(1)).map(|ty| ty.to_string()),
+        Ok(n) => field_types(dialect).get(n.wrapping_sub(1)).map(|ty| ty.to_string()),
         Err(_) => Some(answer.to_string()),
     }
 }
@@ -672,6 +696,7 @@ fn prompt<R: BufRead, W: Write>(input: &mut R, output: &mut W, message: &str) ->
 // Asks for field names and types until an empty name (or end of input) is entered,
 // `timestamps` reserves the `created_at`, `updated_at` and `deleted_at` names,
 // with a `dialect`, only accepts types with a column type in its database (see `Dialect::sql_types`),
+// `menu` being the database targeted by the model, whose types the menu proposes,
 // with `tables` (the model table and the tables of the migrations), asks for the column each field references,
 // with `unique`, asks whether the column of each field is unique
 fn read_fields<R: BufRead, W: Write>(
@@ -679,10 +704,11 @@ fn read_fields<R: BufRead, W: Write>(
     output: &mut W,
     timestamps: bool,
     dialect: Option<Dialect>,
+    menu: Option<Dialect>,
     tables: Option<(&str, &[Table])>,
     unique: bool,
 ) -> Result<Vec<Field>, Error> {
-    read_new_fields(input, output, timestamps, &[], dialect, tables, unique)
+    read_new_fields(input, output, timestamps, &[], dialect, menu, tables, unique)
 }
 
 // `read_fields` of a model already declaring the fields `declared`, whose names are refused
@@ -692,6 +718,7 @@ fn read_new_fields<R: BufRead, W: Write>(
     timestamps: bool,
     declared: &[String],
     dialect: Option<Dialect>,
+    menu: Option<Dialect>,
     tables: Option<(&str, &[Table])>,
     unique: bool,
 ) -> Result<Vec<Field>, Error> {
@@ -741,7 +768,7 @@ fn read_new_fields<R: BufRead, W: Write>(
         }
         let mut answer = inline_type;
         if answer.is_none() {
-            writeln!(output, "  {}", field_types_menu())?;
+            writeln!(output, "  {}", field_types_menu(menu))?;
         }
         let ty = loop {
             let answer = match answer.take() {
@@ -756,11 +783,11 @@ fn read_new_fields<R: BufRead, W: Write>(
                     prompt(input, output, &message)?.unwrap_or_default()
                 }
             };
-            match check_field_type(&answer, dialect) {
+            match check_field_type(&answer, dialect, menu) {
                 Ok(ty) => break ty,
                 Err(error) => {
                     writeln!(output, "{}", failure(&error))?;
-                    writeln!(output, "  {}", field_types_menu())?;
+                    writeln!(output, "  {}", field_types_menu(menu))?;
                 }
             }
         };
@@ -832,8 +859,8 @@ fn read_unique<R: BufRead, W: Write>(input: &mut R, output: &mut W, name: &str, 
 
 // The type of a type answer (see `parse_field_type`), or why it is refused,
 // with a `dialect`, only accepts types with a column type in its database
-fn check_field_type(answer: &str, dialect: Option<Dialect>) -> Result<String, String> {
-    match (parse_field_type(answer), dialect) {
+fn check_field_type(answer: &str, dialect: Option<Dialect>, menu: Option<Dialect>) -> Result<String, String> {
+    match (parse_field_type(answer, menu), dialect) {
         (Some(ty), Some(dialect)) if dialect.sql_column_type(&ty).is_none() => Err(format!(
             "`{}` has no {} column type, use one of {}, or Option<T> of them",
             ty,
@@ -841,7 +868,7 @@ fn check_field_type(answer: &str, dialect: Option<Dialect>) -> Result<String, St
             dialect.sql_types().iter().map(|(ty, _)| *ty).collect::<Vec<_>>().join(", ")
         )),
         (Some(ty), _) => Ok(ty),
-        (None, _) => Err(format!("`{}` is not in the list, pick 1 to {}", answer, FIELD_TYPES.len())),
+        (None, _) => Err(format!("`{}` is not in the list, pick 1 to {}", answer, field_types(menu).len())),
     }
 }
 
@@ -1553,7 +1580,9 @@ fn postgres_types() -> Vec<(&'static str, String)> {
         Vec<String>, Vec<i16>, Vec<i32>, Vec<i64>, Vec<f32>, Vec<f64>, Vec<bool>,
         Vec<DateTime<Utc>>, Vec<NaiveDateTime>, Vec<NaiveDate>, Vec<NaiveTime>, Vec<Vec<u8>>,
     );
-    with_overrides(types, POSTGRES_OVERRIDES)
+    let mut types = with_overrides(types, POSTGRES_OVERRIDES);
+    types.extend(POSTGIS_TYPES.iter().map(|(ty, sql)| (*ty, sql.to_string())));
+    types
 }
 
 // sqlx names a VARCHAR without its length, which is not a valid column type.
@@ -1622,8 +1651,8 @@ impl Dialect {
     }
 
     fn sql_type(self, ty: &str) -> Option<&'static str> {
-        // chrono types can be written with their path
-        let ty = ty.trim_start_matches("chrono::");
+        // chrono types and the PostGIS geometries can be written with their path
+        let ty = ty.trim_start_matches("chrono::").trim_start_matches("octopux::");
         self.sql_types().iter().find(|(t, _)| *t == ty).map(|(_, sql)| sql.as_str())
     }
 
@@ -1729,12 +1758,29 @@ fn render_migration(name: &str, fields: &[Field], timestamps: bool, dialect: Dia
         f.references.as_ref().map(|r| format!("CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})", foreign_key_name(&table, &f.name), f.name, qualified(schema, &r.table), r.column))
     }));
     let create_schema = schema.map_or(String::new(), |schema| format!("CREATE SCHEMA IF NOT EXISTS {};\n", schema));
+    let (extension, indexes) = postgis_statements(&table, schema, fields, dialect);
     Ok(format!(
-        "{}CREATE TABLE IF NOT EXISTS {} (\n    {}\n);\n",
+        "{}{}CREATE TABLE IF NOT EXISTS {} (\n    {}\n);\n{}",
         create_schema,
+        extension,
         qualified(schema, &table),
-        columns.join(",\n    ")
+        columns.join(",\n    "),
+        indexes
     ))
+}
+
+// With PostGIS geometries on PostgreSQL, the statement creating the extension, before the columns,
+// and the GiST indexes of the geometry columns, which the spatial filters use, after them
+fn postgis_statements(table: &str, schema: Option<&str>, fields: &[Field], dialect: Dialect) -> (String, String) {
+    let geometries: Vec<&Field> = fields.iter().filter(|f| is_postgis_type(&f.ty)).collect();
+    if dialect != Dialect::Postgres || geometries.is_empty() {
+        return (String::new(), String::new());
+    }
+    let indexes = geometries
+        .iter()
+        .map(|f| format!("CREATE INDEX IF NOT EXISTS {}_{}_idx ON {} USING GIST ({});\n", table, f.name, qualified(schema, table), f.name))
+        .collect();
+    ("CREATE EXTENSION IF NOT EXISTS postgis;\n".to_string(), indexes)
 }
 
 // `name TYPE [NOT NULL]`, the column of a field, None when its type has no column type in the `dialect` database
@@ -1773,7 +1819,8 @@ fn unique_index_name(table: &str, column: &str) -> String {
 fn render_add_columns(table: &str, fields: &[Field], defaults: &[(String, String)], dialect: Dialect, schema: Option<&str>) -> Result<String, String> {
     let columns = column_definitions(fields, dialect)?;
     let sql_table = qualified(schema, table);
-    let mut sql = String::new();
+    let (extension, indexes) = postgis_statements(table, schema, fields, dialect);
+    let mut sql = extension;
     for (field, column) in fields.iter().zip(columns) {
         sql += &format!("ALTER TABLE {} ADD COLUMN {}", sql_table, column);
         if let Some((_, default)) = defaults.iter().find(|(name, _)| *name == field.name) {
@@ -1788,6 +1835,7 @@ fn render_add_columns(table: &str, fields: &[Field], defaults: &[(String, String
     for field in fields.iter().filter(|f| f.unique) {
         sql += &format!("CREATE UNIQUE INDEX {} ON {} ({});\n", unique_index_name(table, &field.name), sql_table, field.name);
     }
+    sql += &indexes;
     if dialect != Dialect::Sqlite {
         for field in fields {
             if let Some(r) = &field.references {
@@ -2067,6 +2115,39 @@ fn chrono_imports(fields: &[Field], timestamps: bool) -> String {
     }
 }
 
+// Why the PostGIS geometries among `fields` cannot be generated: they are PostgreSQL types
+fn postgis_error(fields: &[Field], dialect: Dialect) -> Option<String> {
+    let geometries: Vec<&str> = fields.iter().filter(|f| is_postgis_type(&f.ty)).map(|f| f.name.as_str()).collect();
+    if geometries.is_empty() || dialect == Dialect::Postgres {
+        None
+    } else {
+        Some(format!("the PostGIS geometries ({}) require --postgres", geometries.join(", ")))
+    }
+}
+
+// How to enable the octopux features the geometry fields need, None without geometry: `postgis`,
+// and `graphql` for the GraphQL scalars of the geometries of a model generated with --graphql
+fn postgis_hint(fields: &[Field], graphql: bool) -> Option<String> {
+    fields.iter().any(|f| is_postgis_type(&f.ty)).then(|| {
+        let (features, scalars) = if graphql { ("postgis,graphql", " and their GraphQL scalars") } else { ("postgis", "") };
+        highlight(&format!(
+            "  The PostGIS geometries{} need the octopux features `{}`: `cargo add octopux --features {}`",
+            scalars, features, features
+        ))
+    })
+}
+
+// Whether a field type names the `postgis` module (`postgis::Point`), which `use octopux::postgis;` imports,
+// rather than its whole path (`octopux::postgis::Point`)
+fn uses_postgis_module(fields: &[Field]) -> bool {
+    fields.iter().any(|f| f.ty.replace("octopux::postgis::", "").contains("postgis::"))
+}
+
+// The import of the `postgis` module named by the geometry fields, empty when none names it
+fn postgis_import(fields: &[Field]) -> &'static str {
+    if uses_postgis_module(fields) { "\n    use octopux::postgis;" } else { "" }
+}
+
 // Keywords a field can be named after as a raw identifier (`r#type`), its column keeps the plain name
 const RAW_KEYWORDS: &[&str] = &[
     "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do", "dyn", "else", "enum", "extern", "false",
@@ -2136,7 +2217,7 @@ fn render_table_model(name: &str, table: Option<&str>, schema: Option<&str>, ope
     let field_lines = struct_fields(fields);
     // keeps the blank line of the empty creatable struct
     let new_fields = if fields.is_empty() { "\n" } else { &field_lines };
-    let chrono_imports = chrono_imports(fields, timestamps);
+    let chrono_imports = chrono_imports(fields, timestamps) + postgis_import(fields);
     let (model_fields, updatable_fields) = if timestamps {
         let timestamp = |name: &str| Field { name: name.to_string(), ty: TIMESTAMP_TYPE.to_string(), references: None, unique: false, length: None };
         (
@@ -2801,6 +2882,7 @@ fn with_added_fields(source: &str, model: &str, fields: &[Field]) -> Result<Stri
         }
     }
     edits.extend(chrono_import_edit(source, &file, fields));
+    edits.extend(postgis_import_edit(source, &file, fields));
     // from the end, so that the offsets of the other edits stay valid
     edits.sort_by_key(|(pos, _)| std::cmp::Reverse(*pos));
     let mut patched = source.to_string();
@@ -2860,6 +2942,43 @@ fn chrono_import_edit(source: &str, file: &syn::File, fields: &[Field]) -> Optio
     }
 }
 
+// Whether a use tree brings the module `module` in scope: `use octopux::postgis;`, `use octopux::postgis::{self, Point};`
+fn imports_module(tree: &syn::UseTree, module: &str) -> bool {
+    match tree {
+        syn::UseTree::Name(name) => name.ident == module,
+        syn::UseTree::Rename(rename) => rename.rename == module,
+        syn::UseTree::Path(path) => {
+            let with_self = matches!(path.tree.as_ref(), syn::UseTree::Group(g) if g.items.iter().any(|t| matches!(t, syn::UseTree::Name(n) if n.ident == "self")));
+            (path.ident == module && with_self) || imports_module(&path.tree, module)
+        }
+        syn::UseTree::Group(group) => group.items.iter().any(|t| imports_module(t, module)),
+        syn::UseTree::Glob(_) => false,
+    }
+}
+
+// The edit importing the `postgis` module named by the geometry `fields` when the file does not import it yet,
+// in a new `use` after the last one
+fn postgis_import_edit(source: &str, file: &syn::File, fields: &[Field]) -> Option<(usize, String)> {
+    let uses: Vec<&syn::ItemUse> = file.items.iter().filter_map(|item| match item {
+        syn::Item::Use(u) => Some(u),
+        _ => None,
+    }).collect();
+    if !uses_postgis_module(fields) || uses.iter().any(|u| imports_module(&u.tree, "postgis")) {
+        return None;
+    }
+    match uses.last() {
+        Some(last) => {
+            let indent = line_indent(source, last.span().byte_range().start).1.unwrap_or_default();
+            Some((last.semi_token.span().byte_range().end, format!("\n{}use octopux::postgis;", indent)))
+        }
+        None => {
+            let first = file.items.first()?.span().byte_range().start;
+            let (start, indent) = line_indent(source, first);
+            Some((start, format!("{}use octopux::postgis;\n", indent.unwrap_or_default())))
+        }
+    }
+}
+
 // Adds fields to an existing model and, with --migration, writes the migration adding their columns
 #[allow(clippy::too_many_arguments)]
 fn add_fields<R: BufRead, W: Write>(
@@ -2883,9 +3002,12 @@ fn add_fields<R: BufRead, W: Write>(
     let declared = read_model_file(&source, model).unwrap_or_else(|e| fail(format!("{} is not a model of {}: {}, no field added", path, model, e)));
     let strict = migration.then_some(dialect);
     let references = tables.map(|t| (table, t));
-    let mut fields = read_new_fields(input, output, declared.timestamps, &declared.fields, strict, references, unique)?;
+    let mut fields = read_new_fields(input, output, declared.timestamps, &declared.fields, strict, Some(dialect), references, unique)?;
     if fields.is_empty() {
         fail(format!("No field entered, {} unchanged", path));
+    }
+    if let Some(error) = postgis_error(&fields, dialect) {
+        fail(format!("{}, no field added", error));
     }
     let mut defaults = Vec::new();
     if migration {
@@ -2920,6 +3042,10 @@ fn add_fields<R: BufRead, W: Write>(
     writeln!(output, "{}", success(&format!("Added {} to {}, {} and {} in {}", names.join(", "), model, new, updatable, path)))?;
     if !declared.sqlx {
         writeln!(output, "{}", warning(&format!("{} does not derive SqlxModel, add the columns to the queries of its model functions", model)))?;
+    }
+    // the GraphQL types of the model are derived with SimpleObject
+    if let Some(hint) = postgis_hint(&fields, source.contains("SimpleObject")) {
+        writeln!(output, "{}", hint)?;
     }
     if let Some((migration, sql)) = migration {
         write_migration(&migration, &sql)?;
@@ -3130,7 +3256,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                 let strict = if migration { Some(dialect) } else { None };
                 let tables = if foreign_keys { known_tables(dialect, schema.as_deref())? } else { Vec::new() };
                 let references = foreign_keys.then_some((table.as_str(), tables.as_slice()));
-                read_fields(&mut io::stdin().lock(), &mut io::stdout(), timestamps, strict, references, unique)?
+                read_fields(&mut io::stdin().lock(), &mut io::stdout(), timestamps, strict, Some(dialect), references, unique)?
             } else {
                 Vec::new()
             };
@@ -3142,6 +3268,10 @@ fn run(opt: Opt) -> Result<(), Error> {
             // GraphQL refuses an input object without fields, as the creatable struct would be
             if graphql && fields.is_empty() {
                 eprintln!("{}", failure(&format!("--graphql needs at least one field, model {} not generated", name)));
+                process::exit(1);
+            }
+            if let Some(error) = postgis_error(&fields, dialect) {
+                eprintln!("{}", failure(&format!("{}, model {} not generated", error, name)));
                 process::exit(1);
             }
             let sql = if migration {
@@ -3167,6 +3297,9 @@ fn run(opt: Opt) -> Result<(), Error> {
             }
             write_source(&path, &render_table_model(&name, Some(&table), schema.as_deref(), openapi, graphql, sqlx, timestamps, &fields, dialect))?;
             println!("{}", success(&format!("Successfully generated model {}, declare it with `mod {};`", path, module)));
+            if let Some(hint) = postgis_hint(&fields, graphql) {
+                println!("{}", hint);
+            }
             if graphql {
                 add_graphql_roots(&std::env::current_dir()?, &module, &name)?;
             }
@@ -3336,7 +3469,7 @@ CREATE INDEX book_idx ON book (code);
         // table by number and default column, table and column by name, no reference, unknown table then self reference
         let input = "author_id:i64\n1\n\nwriter_email\n\n100\nAUTHOR\nemail\ntitle\n\n\n\nparent_id:i64\nnope\n2\n\n\n";
         let mut output = Vec::new();
-        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(("book", &tables)), false).unwrap();
+        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(Dialect::Postgres), Some(("book", &tables)), false).unwrap();
         let reference = |table: &str, column: &str| Some(Reference { table: table.into(), column: column.into() });
         assert_eq!(fields, vec![
             Field { references: reference("author", "id"), ..field("author_id", "i64") },
@@ -3361,14 +3494,14 @@ CREATE INDEX book_idx ON book (code);
         let tables = [author_table()];
         let mut output = Vec::new();
         let input = "author_id:i32\nauthor\n\nauthor_name:String\n\n1\nname\n\n";
-        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(("book", &tables)), false).unwrap();
+        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(Dialect::Postgres), Some(("book", &tables)), false).unwrap();
         assert_eq!(fields.len(), 2);
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("`author_id` is INT4 and `author.id` is INT8, the foreign key may be refused"));
         assert!(output.contains("`author.name` is neither a primary key nor unique"));
         // SQLite does not check the types
         let mut output = Vec::new();
-        read_fields(&mut "author_id:i32\n1\n\n\n".as_bytes(), &mut output, false, Some(Dialect::Sqlite), Some(("book", &tables)), false).unwrap();
+        read_fields(&mut "author_id:i32\n1\n\n\n".as_bytes(), &mut output, false, Some(Dialect::Sqlite), Some(Dialect::Sqlite), Some(("book", &tables)), false).unwrap();
         assert!(!String::from_utf8(output).unwrap().contains("may be refused"));
     }
 
@@ -3409,7 +3542,7 @@ CREATE INDEX book_idx ON book (code);
         // no reference and unique, not unique by default, then a self reference proposing the unique field as unique
         let input = "email\n\n\n\ny\nname\n\n\n\n\nparent_email\n\n\n1\nemail\nno\n\n";
         let mut output = Vec::new();
-        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(("author", &[])), true).unwrap();
+        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(Dialect::Postgres), Some(("author", &[])), true).unwrap();
         let unique = |name: &str| Field { unique: true, ..field(name, "String") };
         assert_eq!(fields, vec![
             unique("email"),
@@ -3426,7 +3559,7 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn read_fields_warns_about_unique_columns_mysql_refuses() {
         let mut output = Vec::new();
-        let fields = read_fields(&mut "hash:Vec<u8>\ny\nemail\n\n\ny\n\n".as_bytes(), &mut output, false, Some(Dialect::Mysql), None, true).unwrap();
+        let fields = read_fields(&mut "hash:Vec<u8>\ny\nemail\n\n\ny\n\n".as_bytes(), &mut output, false, Some(Dialect::Mysql), Some(Dialect::Mysql), None, true).unwrap();
         assert!(fields.iter().all(|f| f.unique));
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("MySQL refuses a unique index on the BLOB column `hash`"));
@@ -3438,7 +3571,7 @@ CREATE INDEX book_idx ON book (code);
         // too long for MySQL, zero, then a length, the default length, no length asked for a TEXT column
         let input = "title\n\n20000\n0\n80\nsummary:String?\n\n\n";
         let mut output = Vec::new();
-        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Mysql), None, false).unwrap();
+        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Mysql), Some(Dialect::Mysql), None, false).unwrap();
         assert_eq!(fields, vec![Field { length: Some(80), ..field("title", "String") }, field("summary", "Option<String>")]);
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("? Length of `title` › (VARCHAR, 1 to 16383) [255] "));
@@ -3451,7 +3584,7 @@ CREATE INDEX book_idx ON book (code);
 );
 ");
         let mut output = Vec::new();
-        read_fields(&mut "title\n\n\n".as_bytes(), &mut output, false, Some(Dialect::Sqlite), None, false).unwrap();
+        read_fields(&mut "title\n\n\n".as_bytes(), &mut output, false, Some(Dialect::Sqlite), Some(Dialect::Sqlite), None, false).unwrap();
         assert!(!String::from_utf8(output).unwrap().contains("Length of"));
     }
 
@@ -3567,7 +3700,7 @@ CREATE INDEX book_idx ON book (code);
         // invalid names, default type, duplicate and reserved `id` are handled
         let input = "title\n\n1bad\nstars\ni32\ntitle\nid\n\n";
         let mut output = Vec::new();
-        let fields = read_fields(&mut input.as_bytes(), &mut output, false, None, None, false).unwrap();
+        let fields = read_fields(&mut input.as_bytes(), &mut output, false, None, None, None, false).unwrap();
         assert_eq!(fields, vec![
             field("title", "String"),
             field("stars", "i32"),
@@ -3582,7 +3715,7 @@ CREATE INDEX book_idx ON book (code);
     fn read_fields_converts_names_to_snake_case() {
         let input = "OptStr\n\nhttpCode\n\nfirst name\n\nlast-name\n\nopt_str\nID\n\n";
         let mut output = Vec::new();
-        let fields = read_fields(&mut input.as_bytes(), &mut output, false, None, None, false).unwrap();
+        let fields = read_fields(&mut input.as_bytes(), &mut output, false, None, None, None, false).unwrap();
         let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["opt_str", "http_code", "first_name", "last_name"]);
         let output = String::from_utf8(output).unwrap();
@@ -3606,24 +3739,24 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn read_fields_stops_at_end_of_input() {
         let mut output = Vec::new();
-        let fields = read_fields(&mut "title\nString".as_bytes(), &mut output, false, None, None, false).unwrap();
+        let fields = read_fields(&mut "title\nString".as_bytes(), &mut output, false, None, None, None, false).unwrap();
         assert_eq!(fields, vec![field("title", "String")]);
     }
 
     #[test]
     fn field_type_can_be_picked_from_the_menu() {
-        assert_eq!(parse_field_type(""), Some("String".into()));
-        assert_eq!(parse_field_type("3"), Some("i64".into()));
-        assert_eq!(parse_field_type("5"), Some("bool".into()));
-        assert_eq!(parse_field_type("chrono::NaiveDate"), Some("chrono::NaiveDate".into()));
-        assert_eq!(parse_field_type("0"), None);
-        assert_eq!(parse_field_type("42"), None);
+        assert_eq!(parse_field_type("", None), Some("String".into()));
+        assert_eq!(parse_field_type("3", None), Some("i64".into()));
+        assert_eq!(parse_field_type("5", None), Some("bool".into()));
+        assert_eq!(parse_field_type("chrono::NaiveDate", None), Some("chrono::NaiveDate".into()));
+        assert_eq!(parse_field_type("0", None), None);
+        assert_eq!(parse_field_type("42", None), None);
     }
 
     #[test]
     fn read_fields_asks_again_for_an_unknown_type_number() {
         let mut output = Vec::new();
-        let fields = read_fields(&mut "done\n42\n5\n\n".as_bytes(), &mut output, false, None, None, false).unwrap();
+        let fields = read_fields(&mut "done\n42\n5\n\n".as_bytes(), &mut output, false, None, None, None, false).unwrap();
         assert_eq!(fields, vec![field("done", "bool")]);
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("1) String  2) i32"));
@@ -3632,18 +3765,18 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn field_type_can_be_made_optional_with_a_question_mark() {
-        assert_eq!(parse_field_type("?"), Some("Option<String>".into()));
-        assert_eq!(parse_field_type("3?"), Some("Option<i64>".into()));
-        assert_eq!(parse_field_type("NaiveDate?"), Some("Option<NaiveDate>".into()));
-        assert_eq!(parse_field_type("Option<i32>?"), Some("Option<i32>".into()));
-        assert_eq!(parse_field_type("42?"), None);
+        assert_eq!(parse_field_type("?", None), Some("Option<String>".into()));
+        assert_eq!(parse_field_type("3?", None), Some("Option<i64>".into()));
+        assert_eq!(parse_field_type("NaiveDate?", None), Some("Option<NaiveDate>".into()));
+        assert_eq!(parse_field_type("Option<i32>?", None), Some("Option<i32>".into()));
+        assert_eq!(parse_field_type("42?", None), None);
     }
 
     #[test]
     fn read_fields_accepts_inline_types_and_removes_the_last_field() {
         let input = "title:String\nstars:2?\nviews\n3\n-\nscore: f64\nbad:42\n5\n\n";
         let mut output = Vec::new();
-        let fields = read_fields(&mut input.as_bytes(), &mut output, false, None, None, false).unwrap();
+        let fields = read_fields(&mut input.as_bytes(), &mut output, false, None, None, None, false).unwrap();
         assert_eq!(fields, vec![
             field("title", "String"),
             field("stars", "Option<i32>"),
@@ -3829,12 +3962,12 @@ CREATE INDEX book_idx ON book (code);
     fn read_fields_asks_again_for_a_type_without_column_type() {
         let mut output = Vec::new();
         let input = "tags\nVec<String>\nchrono::NaiveDate\n\n";
-        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Sqlite), None, false).unwrap();
+        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Sqlite), Some(Dialect::Sqlite), None, false).unwrap();
         assert_eq!(fields, vec![field("tags", "chrono::NaiveDate")]);
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("`Vec<String>` has no SQLite column type, use one of String, i8"));
         // without a migration any type is accepted
-        let fields = read_fields(&mut "tags\nVec<String>\n\n".as_bytes(), &mut Vec::new(), false, None, None, false).unwrap();
+        let fields = read_fields(&mut "tags\nVec<String>\n\n".as_bytes(), &mut Vec::new(), false, None, None, None, false).unwrap();
         assert_eq!(fields, vec![field("tags", "Vec<String>")]);
     }
 
@@ -3861,7 +3994,7 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn timestamps_reserve_their_field_names() {
         let mut output = Vec::new();
-        let fields = read_fields(&mut "created_at\nupdated_at\ndeleted_at\ntitle\n\n".as_bytes(), &mut output, true, None, None, false).unwrap();
+        let fields = read_fields(&mut "created_at\nupdated_at\ndeleted_at\ntitle\n\n".as_bytes(), &mut output, true, None, None, None, false).unwrap();
         assert_eq!(fields, vec![field("title", "String")]);
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("Field `created_at` is already declared"));
@@ -3990,10 +4123,10 @@ CREATE INDEX book_idx ON book (code);
     #[test]
     fn read_fields_checks_types_against_the_database() {
         let mut output = Vec::new();
-        let fields = read_fields(&mut "tags\nVec<String>\n\n".as_bytes(), &mut output, false, Some(Dialect::Postgres), None, false).unwrap();
+        let fields = read_fields(&mut "tags\nVec<String>\n\n".as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(Dialect::Postgres), None, false).unwrap();
         assert_eq!(fields, vec![field("tags", "Vec<String>")]);
         let mut output = Vec::new();
-        let fields = read_fields(&mut "count\nu32\ni64\n\n".as_bytes(), &mut output, false, Some(Dialect::Postgres), None, false).unwrap();
+        let fields = read_fields(&mut "count\nu32\ni64\n\n".as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(Dialect::Postgres), None, false).unwrap();
         assert_eq!(fields, vec![field("count", "i64")]);
         assert!(String::from_utf8(output).unwrap().contains("`u32` has no PostgreSQL column type, use one of String, i16"));
     }
@@ -4617,7 +4750,7 @@ ALTER TABLE book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERE
     fn read_new_fields_refuses_the_declared_fields() {
         let mut output = Vec::new();
         let declared = vec!["id".to_string(), "title".to_string()];
-        let fields = read_new_fields(&mut "title\nstars:i32\n\n".as_bytes(), &mut output, false, &declared, None, None, false).unwrap();
+        let fields = read_new_fields(&mut "title\nstars:i32\n\n".as_bytes(), &mut output, false, &declared, None, None, None, false).unwrap();
         assert_eq!(fields, vec![field("stars", "i32")]);
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("Field `title` is already declared"));
@@ -4697,5 +4830,87 @@ ALTER TABLE book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERE
         assert!(parse(&["--foreign-keys"]).is_err());
         assert!(parse(&["--migration", "--default", "0", "--unique"]).is_ok());
         assert!(Opt::from_iter_safe(["octopux", "add-field", "--model", "Book"]).is_err());
+    }
+
+    #[test]
+    fn postgres_menu_proposes_the_postgis_geometries() {
+        assert_eq!(parse_field_type("12", Some(Dialect::Postgres)), Some("postgis::Point".into()));
+        assert_eq!(parse_field_type("19?", Some(Dialect::Postgres)), Some("Option<postgis::Geometry>".into()));
+        assert_eq!(parse_field_type("20", Some(Dialect::Postgres)), None);
+        assert_eq!(parse_field_type("12", Some(Dialect::Sqlite)), None);
+        assert_eq!(parse_field_type("12", None), None);
+        assert!(super::field_types_menu(Some(Dialect::Postgres)).contains("postgis::MultiPolygon"));
+        assert!(!super::field_types_menu(Some(Dialect::Mysql)).contains("postgis"));
+        // the column of the geometry, written with the module or its whole path
+        assert_eq!(Dialect::Postgres.sql_column_type("postgis::Point"), Some(("geometry(Point, 4326)", true)));
+        assert_eq!(Dialect::Postgres.sql_column_type("Option<octopux::postgis::Polygon>"), Some(("geometry(Polygon, 4326)", false)));
+        assert_eq!(Dialect::Sqlite.sql_column_type("postgis::Point"), None);
+        let mut output = Vec::new();
+        let fields = read_fields(&mut "location\n12\narea:17?\n\n".as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(Dialect::Postgres), None, false).unwrap();
+        assert_eq!(fields, [field("location", "postgis::Point"), field("area", "Option<postgis::MultiPolygon>")]);
+        // without --migration, the menu still proposes the geometries of the targeted database
+        let mut output = Vec::new();
+        let fields = read_fields(&mut "location\n12\n\n".as_bytes(), &mut output, false, None, Some(Dialect::Postgres), None, false).unwrap();
+        assert_eq!(fields, [field("location", "postgis::Point")]);
+        assert!(String::from_utf8(output).unwrap().contains("12) postgis::Point"));
+        let mut output = Vec::new();
+        read_fields(&mut "location:postgis::Point\n\n".as_bytes(), &mut output, false, Some(Dialect::Mysql), Some(Dialect::Mysql), None, false).unwrap();
+        assert!(String::from_utf8(output).unwrap().contains("`postgis::Point` has no MySQL column type"));
+    }
+
+    #[test]
+    fn postgis_migration_creates_the_extension_and_the_gist_indexes() {
+        let fields = [field("name", "String"), field("location", "postgis::Point"), field("area", "Option<octopux::postgis::Polygon>")];
+        assert_eq!(render_migration("place", &fields, false, Dialect::Postgres, Some("geo")).unwrap(), "CREATE SCHEMA IF NOT EXISTS geo;
+CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE TABLE IF NOT EXISTS geo.place (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    location geometry(Point, 4326) NOT NULL,
+    area geometry(Polygon, 4326)
+);
+CREATE INDEX IF NOT EXISTS place_location_idx ON geo.place USING GIST (location);
+CREATE INDEX IF NOT EXISTS place_area_idx ON geo.place USING GIST (area);
+");
+        let added = [field("zone", "Option<postgis::MultiPolygon>")];
+        assert_eq!(render_add_columns("place", &added, &[], Dialect::Postgres, None).unwrap(), "CREATE EXTENSION IF NOT EXISTS postgis;
+ALTER TABLE place ADD COLUMN zone geometry(MultiPolygon, 4326);
+CREATE INDEX IF NOT EXISTS place_zone_idx ON place USING GIST (zone);
+");
+        // without geometry, the migration is unchanged
+        assert!(!render_migration("book", &[field("title", "String")], false, Dialect::Postgres, None).unwrap().contains("postgis"));
+        // the geometry columns are read back from the migration
+        let tables = parse_tables(&render_migration("place", &fields, false, Dialect::Postgres, None).unwrap());
+        assert_eq!(tables[0].columns[2].sql_type, "geometry(Point, 4326)");
+        assert_eq!(tables[0].columns.len(), 4);
+    }
+
+    #[test]
+    fn postgis_fields_import_the_postgis_module() {
+        let fields = [field("location", "postgis::Point")];
+        let source = model_file(&fields, false, true, false, Dialect::Postgres);
+        assert!(source.contains("\n    use octopux::postgis;\n"), "{}", source);
+        assert!(source.contains("pub location: postgis::Point,"));
+        assert!(!model_file(&[field("location", "octopux::postgis::Point")], false, true, false, Dialect::Postgres).contains("use octopux::postgis;"));
+        // added after the last import, once
+        let source = model_file(&[field("title", "String")], false, true, false, Dialect::Postgres);
+        let patched = with_added_fields(&source, "BookPage", &fields).unwrap();
+        assert!(patched.contains("    use octopux::gen_endpoint;\n    use octopux::postgis;\n"), "{}", patched);
+        assert!(syn::parse_file(&patched).is_ok());
+        let again = with_added_fields(&patched, "BookPage", &[field("area", "Option<postgis::Polygon>")]).unwrap();
+        assert_eq!(again.matches("use octopux::postgis;").count(), 1);
+        let imported = patched.replace("use octopux::postgis;", "use octopux::postgis::{self, Point};");
+        assert_eq!(with_added_fields(&imported, "BookPage", &fields).unwrap().matches("use octopux::postgis").count(), 1);
+    }
+
+    #[test]
+    fn postgis_fields_require_postgres_and_their_features() {
+        let fields = [field("title", "String"), field("location", "postgis::Point")];
+        assert_eq!(super::postgis_error(&fields, Dialect::Postgres), None);
+        assert_eq!(super::postgis_error(&fields, Dialect::Sqlite), Some("the PostGIS geometries (location) require --postgres".into()));
+        assert_eq!(super::postgis_error(&fields[..1], Dialect::Sqlite), None);
+        assert!(super::postgis_hint(&fields, false).unwrap().contains("`cargo add octopux --features postgis`"));
+        assert!(super::postgis_hint(&fields, true).unwrap().contains("`cargo add octopux --features postgis,graphql`"));
+        assert_eq!(super::postgis_hint(&fields[..1], true), None);
     }
 }

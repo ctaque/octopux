@@ -42,7 +42,8 @@ impl Dialect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Column {
     pub name: String,
-    // as the database declares it: `INTEGER` (SQLite), `int8` (the PostgreSQL udt name), `int unsigned` (MySQL)
+    // as the database declares it: `INTEGER` (SQLite), `int8` (the PostgreSQL udt name, `geometry(Point,4326)`
+    // for PostGIS), `int unsigned` (MySQL)
     pub sql_type: String,
     pub nullable: bool,
     pub primary_key: bool,
@@ -72,9 +73,15 @@ impl Table {
 // Table of the sqlx migrations, not a model
 const SQLX_MIGRATIONS_TABLE: &str = "_sqlx_migrations";
 
-const POSTGRES_COLUMNS: &str = "SELECT c.table_name::text, c.column_name::text, c.udt_name::text, c.is_nullable = 'YES'
+// The PostGIS columns are given with their geometry kind and SRID, `geometry(Point,4326)`, by `format_type`
+const POSTGRES_COLUMNS: &str = "SELECT c.table_name::text, c.column_name::text,
+    CASE WHEN c.udt_name IN ('geometry', 'geography') THEN format_type(a.atttypid, a.atttypmod) ELSE c.udt_name::text END,
+    c.is_nullable = 'YES'
 FROM information_schema.columns c
 JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+JOIN pg_namespace n ON n.nspname = c.table_schema
+JOIN pg_class cl ON cl.relnamespace = n.oid AND cl.relname = c.table_name
+JOIN pg_attribute a ON a.attrelid = cl.oid AND a.attname = c.column_name
 WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE' AND c.table_name <> '_sqlx_migrations'
 ORDER BY c.table_name, c.ordinal_position";
 

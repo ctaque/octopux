@@ -22,5 +22,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Les tests qui demandent une base PostgreSQL / PostGIS live sont `#[ignore]` et ne tournent
+      # jamais ici : ne pas passer `--ignored` ni `--include-ignored`, ils s'arrêtent d'eux-mêmes
+      # quand `CI` est défini (GitHub Actions le définit)
       - name: Run tests
         run: cargo test --workspace --locked

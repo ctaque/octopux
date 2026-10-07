@@ -33,15 +33,20 @@ sqlx = { version = "0.9", default-features = false, features = ["chrono"], optio
 chrono = { workspace = true, optional = true }
 # Conversions of the PostGIS geometries to and from the types of the `geo` ecosystem
 geo-types = { version = "0.7", optional = true }
+# The GraphQL scalars of the PostGIS geometries, with the `postgis` feature
+async-graphql = { version = "7", default-features = false, optional = true }
 
 [features]
 openapi = ["dep:apistos", "dep:schemars"]
 sqlx = ["dep:sqlx", "dep:chrono"]
 # The PostGIS `geometry` and `geography` columns, read and written by the sqlx derives on PostgreSQL
 postgis = ["sqlx", "sqlx/postgres", "dep:geo-types"]
+# With `postgis`, the geometries are GraphQL scalars (async-graphql), GeoJSON as in the REST routes
+graphql = ["dep:async-graphql"]
 
 [dev-dependencies]
 apistos.workspace = true
+async-graphql.workspace = true
 schemars.workspace = true
 chrono.workspace = true
 
@@ -55,3 +60,14 @@ required-features = ["openapi"]
 [[test]]
 name = "sqlx"
 required-features = ["sqlx"]
+
+# Needs a live PostgreSQL database with PostGIS: ignored by `cargo test` and skipped in the CI,
+# run with `cargo test -p octopux --features postgis --test postgis -- --ignored`
+[[test]]
+name = "postgis"
+required-features = ["postgis"]
+
+# The GraphQL scalars of the geometries, in a schema, without database
+[[test]]
+name = "graphql_postgis"
+required-features = ["postgis", "graphql"]

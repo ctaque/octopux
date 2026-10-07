@@ -11,7 +11,8 @@ release = false
 strip = false
 
 [dependencies]
-octopux = { workspace = true, features = ["openapi", "sqlx", "postgis"] }
+# `graphql`: the geometries are GraphQL scalars too, GeoJSON as in the REST routes
+octopux = { workspace = true, features = ["openapi", "sqlx", "postgis", "graphql"] }
 actix-web = "4.15.0"
 apistos = { version = "0.9.0", features = ["chrono", "swagger-ui"] }
 async-trait = "0.1.92"
@@ -20,3 +21,5 @@ schemars = { version = "0.8.22", package = "apistos-schemars", features = ["chro
 serde = { version = "1.0.229", features = ["derive"] }
 sqlx.workspace = true
 dotenvy = "0.15.7"
+async-graphql = { version = "7", features = ["chrono"] }
+async-graphql-actix-web = "7"

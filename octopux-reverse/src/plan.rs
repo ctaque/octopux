@@ -35,8 +35,27 @@ fn sqlite_type(declared: &str) -> Option<&'static str> {
     })
 }
 
+// The PostGIS geometry of a `geometry` or `geography` column, `geometry(Point,4326)` giving `postgis::Point`
+// (octopux `postgis` feature), None for the 3D and measured kinds (`PointZ`), which octopux does not decode
+fn postgis_type(column_type: &str) -> Option<String> {
+    let (base, modifiers) = match column_type.split_once('(') {
+        Some((base, rest)) => (base, rest.trim_end_matches(')')),
+        None => (column_type, ""),
+    };
+    if base != "geometry" && base != "geography" {
+        return None;
+    }
+    let kind = modifiers.split(',').next().unwrap_or_default().trim();
+    let kinds = ["Point", "LineString", "Polygon", "MultiPoint", "MultiLineString", "MultiPolygon", "GeometryCollection", "Geometry"];
+    let kind = if kind.is_empty() { Some("Geometry") } else { kinds.into_iter().find(|k| k.eq_ignore_ascii_case(kind)) };
+    kind.map(|k| format!("postgis::{}", k))
+}
+
 // From the udt name, `_int4` being an array of `int4`
 fn postgres_type(udt: &str) -> Option<String> {
+    if udt.starts_with("geometry") || udt.starts_with("geography") {
+        return postgis_type(udt);
+    }
     if let Some(element) = udt.strip_prefix('_') {
         return postgres_type(element).filter(|ty| !ty.starts_with("Vec<") || ty == "Vec<u8>").map(|ty| format!("Vec<{}>", ty));
     }
@@ -487,6 +506,11 @@ mod tests {
         assert_eq!(rust_type(Dialect::Postgres, "_int4").as_deref(), Some("Vec<i32>"));
         assert_eq!(rust_type(Dialect::Postgres, "_bytea").as_deref(), Some("Vec<Vec<u8>>"));
         assert_eq!(rust_type(Dialect::Postgres, "uuid").as_deref(), Some("uuid::Uuid"));
+        assert_eq!(rust_type(Dialect::Postgres, "geometry(Point,4326)").as_deref(), Some("postgis::Point"));
+        assert_eq!(rust_type(Dialect::Postgres, "geography(MultiPolygon,4326)").as_deref(), Some("postgis::MultiPolygon"));
+        assert_eq!(rust_type(Dialect::Postgres, "geometry").as_deref(), Some("postgis::Geometry"));
+        assert_eq!(rust_type(Dialect::Postgres, "geometry(Geometry,3857)").as_deref(), Some("postgis::Geometry"));
+        assert_eq!(rust_type(Dialect::Postgres, "geometry(PointZ,4326)"), None);
         assert_eq!(rust_type(Dialect::Postgres, "my_enum"), None);
         assert_eq!(rust_type(Dialect::Mysql, "tinyint(1)").as_deref(), Some("bool"));
         assert_eq!(rust_type(Dialect::Mysql, "int unsigned").as_deref(), Some("u32"));
@@ -552,12 +576,12 @@ mod tests {
             column("updated_at", "timestamptz", true),
             column("deleted_at", "timestamptz", true),
             column("Weird", "text", true),
-            column("location", "geometry", true),
+            column("search", "tsvector", true),
         ];
         let plan = plan(&[table("post", columns, &[])], Dialect::Postgres);
         assert!(plan.models[0].timestamps);
         assert_eq!(plan.models[0].fields, [("title".to_string(), "String".to_string())]);
-        assert_eq!(plan.warnings, ["post.Weird: left out, its name is not snake_case", "post.location: left out, no field type for geometry"]);
+        assert_eq!(plan.warnings, ["post.Weird: left out, its name is not snake_case", "post.search: left out, no field type for tsvector"]);
         // a timestamp of another type stays a field
         let columns = vec![id(), column("created_at", "timestamp", true), column("updated_at", "timestamptz", true), column("deleted_at", "timestamptz", true)];
         assert!(!plan_models(columns)[0].timestamps);
