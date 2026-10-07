@@ -45,16 +45,17 @@ fn highlight(message: &str) -> String {
         .collect()
 }
 
+// The status messages start with a blank line to set them apart from the previous output
 fn success(message: &str) -> String {
-    format!("{} {}", green("✔"), highlight(message))
+    format!("\n{} {}", green("✔"), highlight(message))
 }
 
 fn failure(message: &str) -> String {
-    format!("{} {}", red("✘"), highlight(message))
+    format!("\n{} {}", red("✘"), highlight(message))
 }
 
 fn warning(message: &str) -> String {
-    format!("{} {}", yellow("!"), highlight(message))
+    format!("\n{} {}", yellow("!"), highlight(message))
 }
 
 #[derive(Debug, StructOpt)]
@@ -762,7 +763,7 @@ fn read_new_fields<R: BufRead, W: Write>(
     let mut fields: Vec<Field> = Vec::new();
     let mut reserved: Vec<&str> = if timestamps { vec!["id", "created_at", "updated_at", "deleted_at"] } else { vec!["id"] };
     reserved.extend(declared.iter().map(String::as_str));
-    writeln!(output, "{}", bold("Model fields"))?;
+    writeln!(output, "\n{}", bold("Model fields"))?;
     if !declared.is_empty() {
         writeln!(output, "{}", highlight(&format!("Enter the fields to add (empty name to finish), the model already declares {}", declared.join(", "))))?;
     } else if timestamps {
@@ -773,6 +774,8 @@ fn read_new_fields<R: BufRead, W: Write>(
     writeln!(output, "{}", highlight("Wrap a type in `Option<T>` (e.g. `Option<i32>`) to make the field optional, its column is then nullable"))?;
     writeln!(output, "{}", dim(&highlight("Tips: `name:type` skips the type question (`stars:i32`, `stars:2`), a trailing `?` makes the type optional (`2?`), `-` removes the last field")))?;
     loop {
+        // a blank line between the fields
+        writeln!(output)?;
         let message = format!("{} {} ", cyan("?"), bold(&format!("Field {} name ›", fields.len() + 1)));
         let answer = match prompt(input, output, &message)? {
             Some(answer) if !answer.is_empty() => answer,
@@ -2140,7 +2143,7 @@ fn changes_summary(files: &[(String, bool)]) -> String {
 // Shows the recap of the files and asks for saving them, only an explicit no refuses,
 // so that a session is not lost on an empty answer, and the fields can still be piped
 fn confirm_save<R: BufRead, W: Write>(input: &mut R, output: &mut W, files: &[(String, bool)]) -> Result<bool, Error> {
-    writeln!(output, "{}", changes_summary(files))?;
+    writeln!(output, "\n{}", changes_summary(files))?;
     let answer = prompt(input, output, &format!("{} {} {} ", cyan("?"), bold("Save the changes?"), dim("(Y/n)")))?;
     Ok(!matches!(answer.as_deref().map(str::to_lowercase).as_deref(), Some("n" | "no")))
 }
@@ -2866,7 +2869,7 @@ fn add_graphql_roots(root: &Path, module: &str, entity: &str) -> Result<(), Erro
             println!(
                 "{}",
                 highlight(&format!(
-                    "  Merge `{module}::{name}Query` and `{module}::{name}Mutation` into the roots of the async-graphql schema, built with `.data(state.clone())`, its dependencies are added with `cargo add async-graphql@7 --features chrono` and `cargo add async-graphql-actix-web@7`",
+                    "  Merge `{module}::{name}Query` and `{module}::{name}Mutation` into the roots of the async-graphql schema",
                     module = module,
                     name = entity
                 ))
@@ -3242,7 +3245,7 @@ fn bootstrap_options<R: BufRead, W: Write>(cli: &Cli, input: &mut R, output: &mu
     if cli.sqlite || cli.postgres || cli.mysql {
         return Ok(BootstrapOptions { dialect: Dialect::from_flags(cli.postgres, cli.mysql), openapi: cli.openapi, graphql: cli.graphql });
     }
-    writeln!(output, "{}", bold("Bootstrap"))?;
+    writeln!(output, "\n{}", bold("Bootstrap"))?;
     let menu = DIALECTS
         .iter()
         .enumerate()
