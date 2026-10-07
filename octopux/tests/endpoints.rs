@@ -407,7 +407,6 @@ async fn find_error_returns_500_and_not_404() {
     for req in [
         test::TestRequest::get().uri("/v1/item/7"),
         test::TestRequest::delete().uri("/v1/item/7"),
-        test::TestRequest::put().uri("/v1/item/7").set_json(json!({ "id": 7, "content": "x" })),
     ] {
         let resp = test::call_service(&app, req.to_request()).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -546,8 +545,9 @@ async fn update_existing_entity_returns_updated_entity() {
     assert_eq!(state.items.lock().unwrap()[&3].content, "updated");
 }
 
+// `update` answers 404 itself, the handler does not look the entity up first
 #[actix_web::test]
-async fn update_unknown_id_returns_404_without_calling_update() {
+async fn update_unknown_id_returns_the_404_of_update() {
     let state = AppState::with_items(&[]);
     let app = init!(state);
 
@@ -559,7 +559,7 @@ async fn update_unknown_id_returns_404_without_calling_update() {
 
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     assert_eq!(body_json(resp).await, not_found());
-    assert_eq!(state.update_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(state.update_calls.load(Ordering::SeqCst), 1);
 }
 
 #[actix_web::test]
@@ -582,20 +582,18 @@ async fn update_with_payload_id_different_from_path_id_returns_400() {
 }
 
 #[actix_web::test]
-async fn update_uses_default_find_query() {
+async fn update_does_not_find_the_entity_first() {
     let state = AppState::with_items(&[(3, "old")]);
     let app = init!(state);
 
     let req = test::TestRequest::put()
-        .uri("/v1/item/3?expand=owner")
+        .uri("/v1/item/3")
         .set_json(serde_json::json!({ "id": 3, "content": "updated" }))
         .to_request();
     test::call_service(&app, req).await;
 
-    assert_eq!(
-        *state.last_find_query.lock().unwrap(),
-        Some(FindQuery::default())
-    );
+    assert_eq!(*state.last_find_query.lock().unwrap(), None);
+    assert_eq!(state.update_calls.load(Ordering::SeqCst), 1);
 }
 
 #[actix_web::test]

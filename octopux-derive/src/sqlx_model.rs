@@ -7,7 +7,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::ext::IdentExt;
 
-use crate::{HttpCreateDeriveParams, HttpFindListDeleteDeriveParams, HttpUpdateDeriveParams};
+use crate::{find_attr, parse_http_attr, HttpCreateDeriveParams, HttpFindListDeleteDeriveParams, HttpUpdateDeriveParams};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Database {
@@ -94,17 +94,6 @@ struct Config {
     model: Option<syn::Path>,
     default_limit: i64,
     max_limit: i64,
-}
-
-fn find_attr<'a>(ast: &'a syn::DeriveInput, name: &str) -> Option<&'a syn::Attribute> {
-    ast.attrs.iter().find(|a| a.path().is_ident(name))
-}
-
-fn parse_http_attr<T: syn::parse::Parse>(ast: &syn::DeriveInput, name: &str, derive: &str) -> syn::Result<T> {
-    let attr = find_attr(ast, name).ok_or_else(|| {
-        syn::Error::new_spanned(&ast.ident, format!("{} requires the #[{}(...)] attribute", derive, name))
-    })?;
-    attr.parse_args()
 }
 
 // `default_table` gives the table when `table` is not set
@@ -222,22 +211,25 @@ pub fn impl_sqlx_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
                     .await?;
             }
         }
-        // the row is selected after its update, which fails when it was already deleted
+        // the row is selected after its update, which fails when it was already deleted,
+        // in the same transaction
         (true, false) => {
             let sql = format!("UPDATE {} SET deleted_at = {} WHERE id = {}{}", table, p[0], p[1], not_deleted(&config));
             quote! {
+                let mut tx = state.#pool.begin().await?;
                 let result = ::octopux::__private::sqlx::query(#sql)
                     .bind(#now)
                     .bind(&self.id)
-                    .execute(&state.#pool)
+                    .execute(&mut *tx)
                     .await?;
                 if result.rows_affected() == 0 {
                     return Err(::octopux::Error::NotFound.into());
                 }
                 let model = ::octopux::__private::sqlx::query_as::<_, #name>(#select_by_id)
                     .bind(&self.id)
-                    .fetch_one(&state.#pool)
+                    .fetch_one(&mut *tx)
                     .await?;
+                tx.commit().await?;
             }
         }
         (false, true) => {
@@ -249,18 +241,21 @@ pub fn impl_sqlx_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
                     .await?;
             }
         }
-        // the row is selected before its deletion
+        // the row is selected before its deletion, locked until the transaction commits
         (false, false) => {
             let sql = format!("DELETE FROM {} WHERE id = {}", table, p[0]);
+            let select_for_update = format!("{} FOR UPDATE", select_by_id);
             quote! {
-                let model = ::octopux::__private::sqlx::query_as::<_, #name>(#select_by_id)
+                let mut tx = state.#pool.begin().await?;
+                let model = ::octopux::__private::sqlx::query_as::<_, #name>(#select_for_update)
                     .bind(&self.id)
-                    .fetch_one(&state.#pool)
+                    .fetch_one(&mut *tx)
                     .await?;
                 ::octopux::__private::sqlx::query(#sql)
                     .bind(&self.id)
-                    .execute(&state.#pool)
+                    .execute(&mut *tx)
                     .await?;
+                tx.commit().await?;
             }
         }
     };
@@ -363,16 +358,19 @@ pub fn impl_sqlx_new_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 .await?;
         }
     } else {
+        // the inserted row is selected in the same transaction
         let select = format!("SELECT * FROM {} WHERE id = ?", table);
         quote! {
+            let mut tx = state.#pool.begin().await?;
             let result = ::octopux::__private::sqlx::query(#insert)
                 #(#binds)*
-                .execute(&state.#pool)
+                .execute(&mut *tx)
                 .await?;
             let model = ::octopux::__private::sqlx::query_as::<_, #model>(#select)
                 .bind(result.last_insert_id())
-                .fetch_one(&state.#pool)
+                .fetch_one(&mut *tx)
                 .await?;
+            tx.commit().await?;
         }
     };
     let this = this(&config, &app_state);
@@ -436,17 +434,21 @@ pub fn impl_sqlx_updatable_model(ast: &syn::DeriveInput) -> syn::Result<TokenStr
                 .await?;
         }
     } else {
+        // the updated row is selected in the same transaction, a missing row answering 404:
+        // MySQL counts as affected only the rows whose values changed
         let select = format!("SELECT {} FROM {} WHERE id = ?{}", returned.join(", "), table, not_deleted(&config));
         quote! {
+            let mut tx = state.#pool.begin().await?;
             ::octopux::__private::sqlx::query(#update)
                 #(#binds)*
                 .bind(&this.id)
-                .execute(&state.#pool)
+                .execute(&mut *tx)
                 .await?;
             let model = ::octopux::__private::sqlx::query_as::<_, #name>(#select)
                 .bind(&this.id)
-                .fetch_one(&state.#pool)
+                .fetch_one(&mut *tx)
                 .await?;
+            tx.commit().await?;
         }
     };
     let this = this(&config, &app_state);
@@ -525,6 +527,9 @@ mod tests {
         });
         assert!(out.contains("\"SELECT * FROM project ORDER BY id LIMIT ? OFFSET ?\""), "{}", out);
         assert!(out.contains("\"DELETE FROM project WHERE id = ?\""), "{}", out);
+        assert!(out.contains("\"SELECT * FROM project WHERE id = ? FOR UPDATE\""), "{}", out);
+        assert!(out.contains("state . db . begin ()"), "{}", out);
+        assert!(out.contains("tx . commit ()"), "{}", out);
         assert!(!out.contains("RETURNING"), "{}", out);
         assert!(out.contains("state . db"), "{}", out);
     }
@@ -580,6 +585,8 @@ mod tests {
         });
         assert!(mysql.contains("\"INSERT INTO project () VALUES ()\""), "{}", mysql);
         assert!(mysql.contains("last_insert_id"), "{}", mysql);
+        assert!(mysql.contains("execute (& mut * tx)"), "{}", mysql);
+        assert!(mysql.contains("tx . commit ()"), "{}", mysql);
     }
 
     #[test]

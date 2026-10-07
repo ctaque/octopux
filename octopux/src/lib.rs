@@ -328,6 +328,10 @@ pub trait NewModel<T, Q, AppState> {
 
 /// A trait to implement on your Updatable entity
 ///
+/// The `PUT` route calls `update` without looking the entity up first: it returns
+/// [`Error::NotFound`] (or the `sqlx::Error::RowNotFound` of a `fetch_one`) when no entity has
+/// the id, which answers 404.
+///
 /// ```ignore
 ///
 /// use octopux::{

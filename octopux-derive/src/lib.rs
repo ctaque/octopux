@@ -21,17 +21,12 @@ impl syn::parse::Parse for HttpCreateDeriveParams {
 }
 #[proc_macro_derive(HttpCreate, attributes(http_create))]
 pub fn http_create(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let ast = syn::parse(input).unwrap();
-    impl_http_create_macro(&ast)
+    let ast = parse_macro_input!(input as syn::DeriveInput);
+    impl_http_create_macro(&ast).unwrap_or_else(|e| e.to_compile_error()).into()
 }
 
-fn impl_http_create_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
-    let attribute = ast.attrs.iter().filter(
-        |a| a.path().segments.len() == 1 && a.path().segments[0].ident == "http_create"
-    ).nth(0).expect("http_create attribute required for deriving HttpCreate!");
-
-    let parameter: HttpCreateDeriveParams = attribute.parse_args().expect("Invalid http_create attribute!");
-    let HttpCreateDeriveParams(query, app_state) = parameter;
+fn impl_http_create_macro(ast: &syn::DeriveInput) -> SynResult<proc_macro2::TokenStream> {
+    let HttpCreateDeriveParams(query, app_state) = parse_http_attr(ast, "http_create", "HttpCreate")?;
 
     let name = &ast.ident;
     let gen = quote! {
@@ -49,7 +44,7 @@ fn impl_http_create_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
             }
         }
     };
-    gen.into()
+    Ok(gen)
 }
 
 struct HttpFindListDeleteDeriveParams (syn::Ident, syn::Ident, syn::Ident, syn::Ident, syn::Ident);
@@ -87,7 +82,10 @@ pub fn octopux_info(args: proc_macro::TokenStream, input: proc_macro::TokenStrea
         Ok(v) => v,
         Err(e) => { return proc_macro::TokenStream::from(darling::Error::from(e).write_errors()); }
     };
-    let ast: syn::DeriveInput = syn::parse(input.clone()).unwrap();
+    let ast: syn::DeriveInput = match syn::parse(input.clone()) {
+        Ok(ast) => ast,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
     let args_tokens = match RestfulInfo::from_list(&attrs_args) {
         Ok(v) => v,
@@ -111,17 +109,13 @@ pub fn octopux_info(args: proc_macro::TokenStream, input: proc_macro::TokenStrea
 
 #[proc_macro_derive(HttpFindListDelete, attributes(http_find_list_delete))]
 pub fn http_find_list_delete(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let ast = syn::parse(input).unwrap();
-    impl_http_find_list_delete_macro(&ast)
+    let ast = parse_macro_input!(input as syn::DeriveInput);
+    impl_http_find_list_delete_macro(&ast).unwrap_or_else(|e| e.to_compile_error()).into()
 }
 
-fn impl_http_find_list_delete_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
-    let attribute = ast.attrs.iter().filter(
-        |a| a.path().segments.len() == 1 && a.path().segments[0].ident == "http_find_list_delete"
-    ).nth(0).expect("http_find_list_delete attribute required for deriving HttpFindListDelete!");
-
-    let parameter: HttpFindListDeleteDeriveParams = attribute.parse_args().expect("Invalid http_find_list_delete attribute!");
-    let HttpFindListDeleteDeriveParams(id, find_query, list_query, delete_query, app_state) = parameter;
+fn impl_http_find_list_delete_macro(ast: &syn::DeriveInput) -> SynResult<proc_macro2::TokenStream> {
+    let HttpFindListDeleteDeriveParams(id, find_query, list_query, delete_query, app_state) =
+        parse_http_attr(ast, "http_find_list_delete", "HttpFindListDelete")?;
 
     let name = &ast.ident;
     let gen = quote! {
@@ -180,7 +174,7 @@ fn impl_http_find_list_delete_macro(ast: &syn::DeriveInput) -> proc_macro::Token
             }
         }
     };
-    gen.into()
+    Ok(gen)
 }
 
 struct HttpUpdateDeriveParams (syn::Ident, syn::Ident, syn::Ident, syn::Ident, syn::Ident);
@@ -202,17 +196,15 @@ impl syn::parse::Parse for HttpUpdateDeriveParams {
 
 #[proc_macro_derive(HttpUpdate, attributes(http_update))]
 pub fn http_update(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let ast = syn::parse(input).unwrap();
-    impl_http_update_macro(&ast)
+    let ast = parse_macro_input!(input as syn::DeriveInput);
+    impl_http_update_macro(&ast).unwrap_or_else(|e| e.to_compile_error()).into()
 }
 
-fn impl_http_update_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
-    let attribute = ast.attrs.iter().filter(
-        |a| a.path().segments.len() == 1 && a.path().segments[0].ident == "http_update"
-    ).nth(0).expect("http_update attribute required for deriving HttpUpdate!");
-
-    let parameter: HttpUpdateDeriveParams = attribute.parse_args().expect("Invalid http_update attribute!");
-    let HttpUpdateDeriveParams(id, query, output, find_query, app_state) = parameter;
+// The output and find query of the attribute are not used by the handler: `update` answers
+// 404 itself when no entity has the id, `SqlxUpdatableModel` reading its table from the output.
+fn impl_http_update_macro(ast: &syn::DeriveInput) -> SynResult<proc_macro2::TokenStream> {
+    let HttpUpdateDeriveParams(id, query, _output, _find_query, app_state) =
+        parse_http_attr(ast, "http_update", "HttpUpdate")?;
 
     let name = &ast.ident;
     // The path id identifies the entity to update: reject payloads targeting another one.
@@ -244,22 +236,14 @@ fn impl_http_update_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
                 let to_update = payload.into_inner();
                 #id_check
                 let params = query.into_inner();
-                let find_params: #find_query = Default::default();
-                let result = #output::find(info.id.into(), &find_params, &state).await;
-
-                match result {
-                    Ok(_) => {
-                        match to_update.update(&params, &state).await {
-                            Ok(e) => ::octopux::__private::actix_web::HttpResponse::Ok().json(e),
-                            Err(err) => ::octopux::__private::error_response(err)
-                        }
-                    }
+                match to_update.update(&params, &state).await {
+                    Ok(e) => ::octopux::__private::actix_web::HttpResponse::Ok().json(e),
                     Err(err) => ::octopux::__private::error_response(err)
                 }
             }
         }
     };
-    gen.into()
+    Ok(gen)
 }
 
 // The sqlx derives also declare the `http_*` attribute they read the types from,
@@ -293,6 +277,19 @@ pub fn sqlx_updatable_model(input: proc_macro::TokenStream) -> proc_macro::Token
 pub fn sqlx_filter(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let ast = parse_macro_input!(input as syn::DeriveInput);
     sqlx_filter::impl_sqlx_filter(&ast).unwrap_or_else(|e| e.to_compile_error()).into()
+}
+
+fn find_attr<'a>(ast: &'a syn::DeriveInput, name: &str) -> Option<&'a syn::Attribute> {
+    ast.attrs.iter().find(|a| a.path().is_ident(name))
+}
+
+// The types of an `http_*` attribute, an error pointing at the struct when it is missing
+// and at the attribute when it is invalid
+fn parse_http_attr<T: syn::parse::Parse>(ast: &syn::DeriveInput, name: &str, derive: &str) -> SynResult<T> {
+    let attr = find_attr(ast, name).ok_or_else(|| {
+        syn::Error::new_spanned(&ast.ident, format!("{} requires the #[{}(...)] attribute", derive, name))
+    })?;
+    attr.parse_args()
 }
 
 fn has_named_field(ast: &syn::DeriveInput, field: &str) -> bool {
@@ -387,6 +384,44 @@ mod tests {
         let enumeration: syn::DeriveInput = syn::parse_quote! { enum UpdatableItem { A { id: i64 } } };
         assert!(!has_named_field(&tuple, "id"));
         assert!(!has_named_field(&enumeration, "id"));
+    }
+
+    fn expand(f: fn(&syn::DeriveInput) -> SynResult<proc_macro2::TokenStream>, ast: syn::DeriveInput) -> String {
+        f(&ast).map(|t| t.to_string()).unwrap_or_else(|e| format!("error: {}", e))
+    }
+
+    #[test]
+    fn http_derives_report_a_missing_attribute() {
+        let create = expand(impl_http_create_macro, syn::parse_quote! { struct NewItem { content: String } });
+        assert_eq!(create, "error: HttpCreate requires the #[http_create(...)] attribute");
+        let model = expand(impl_http_find_list_delete_macro, syn::parse_quote! { struct Item { id: Id } });
+        assert_eq!(model, "error: HttpFindListDelete requires the #[http_find_list_delete(...)] attribute");
+        let update = expand(impl_http_update_macro, syn::parse_quote! { struct UpdatableItem { id: Id } });
+        assert_eq!(update, "error: HttpUpdate requires the #[http_update(...)] attribute");
+    }
+
+    #[test]
+    fn http_derives_report_an_invalid_attribute() {
+        let create = expand(impl_http_create_macro, syn::parse_quote! {
+            #[http_create(SaveQuery)]
+            struct NewItem { content: String }
+        });
+        assert!(create.starts_with("error: "), "{}", create);
+        let update = expand(impl_http_update_macro, syn::parse_quote! {
+            #[http_update(Id, UpdateQuery, Item, FindQuery)]
+            struct UpdatableItem { id: Id }
+        });
+        assert!(update.starts_with("error: "), "{}", update);
+    }
+
+    #[test]
+    fn http_update_does_not_find_the_entity_first() {
+        let update = expand(impl_http_update_macro, syn::parse_quote! {
+            #[http_update(Id, UpdateQuery, Item, FindQuery, AppState)]
+            struct UpdatableItem { id: Id, content: String }
+        });
+        assert!(!update.contains("find"), "{}", update);
+        assert!(update.contains("to_update . update (& params , & state)"), "{}", update);
     }
 
     fn restful_info(args: proc_macro2::TokenStream) -> darling::Result<RestfulInfo> {
