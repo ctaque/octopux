@@ -77,6 +77,10 @@ fn postgres_type(udt: &str) -> Option<String> {
             "uuid" => "uuid::Uuid",
             "numeric" => "rust_decimal::Decimal",
             "json" | "jsonb" => "serde_json::Value",
+            // the octopux `pgvector` feature
+            "vector" => "pgvector::Vector",
+            "halfvec" => "pgvector::HalfVector",
+            "sparsevec" => "pgvector::SparseVector",
             _ => return None,
         }
         .to_string(),
@@ -511,6 +515,10 @@ mod tests {
         assert_eq!(rust_type(Dialect::Postgres, "geometry").as_deref(), Some("postgis::Geometry"));
         assert_eq!(rust_type(Dialect::Postgres, "geometry(Geometry,3857)").as_deref(), Some("postgis::Geometry"));
         assert_eq!(rust_type(Dialect::Postgres, "geometry(PointZ,4326)"), None);
+        assert_eq!(rust_type(Dialect::Postgres, "vector").as_deref(), Some("pgvector::Vector"));
+        assert_eq!(rust_type(Dialect::Postgres, "halfvec").as_deref(), Some("pgvector::HalfVector"));
+        assert_eq!(rust_type(Dialect::Postgres, "sparsevec").as_deref(), Some("pgvector::SparseVector"));
+        assert_eq!(rust_type(Dialect::Postgres, "_vector").as_deref(), Some("Vec<pgvector::Vector>"));
         assert_eq!(rust_type(Dialect::Postgres, "my_enum"), None);
         assert_eq!(rust_type(Dialect::Mysql, "tinyint(1)").as_deref(), Some("bool"));
         assert_eq!(rust_type(Dialect::Mysql, "int unsigned").as_deref(), Some("u32"));
