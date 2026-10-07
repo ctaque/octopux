@@ -42,7 +42,11 @@ struct Item {
 #[async_trait]
 impl Model<Id, FindQuery, ListQuery, ListResult, DeleteQuery, DeleteResult, AppState> for Item {
     async fn find(id: Id, _query: &FindQuery, _state: &AppState) -> Result<Box<Item>> {
-        // fetch from somwhere with id and return result
+        // fetch from somwhere with id and return result, an unknown id answering
+        // 404 {"code": "ENTITY_NOT_FOUND", "message": "no entity has this id"}
+        if !(0..2).contains(&id) {
+            return Err(octopux::Error::NotFound.into());
+        }
         Ok(
             Box::new(
                 Item {

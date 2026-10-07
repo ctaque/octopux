@@ -26,12 +26,12 @@ impl BeforeSave<AppState> for UpdatableMyModel {
     }
 }
 
-
+// An invalid email answers 400 {"code": "BAD_REQUEST", "message": "the email is invalid"}
 #[async_trait]
 impl BeforeSave<AppState> for NewMyChildModel {
     async fn before_save(mut self: Self, _: &AppState) -> Result<Self> {
         if EmailAddress::is_valid(&self.email) == false {
-            anyhow::bail!("Invalid Email");
+            return Err(octopux::Error::BadRequest("the email is invalid".into()).into());
         }
         Ok(self)
     }
@@ -41,7 +41,7 @@ impl BeforeSave<AppState> for NewMyChildModel {
 impl BeforeSave<AppState> for UpdatableMyChildModel {
     async fn before_save(mut self: Self, _: &AppState) -> Result<Self> {
         if EmailAddress::is_valid(&self.email) == false {
-            anyhow::bail!("Invalid Email");
+            return Err(octopux::Error::BadRequest("the email is invalid".into()).into());
         }
         Ok(self)
     }
