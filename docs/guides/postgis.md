@@ -78,6 +78,60 @@ CREATE INDEX place_location_geography_idx ON place USING GIST ((location::geogra
 
 With the `graphql` feature too, the geometries are async-graphql scalars, the same GeoJSON: `GeoJsonPoint`, `GeoJsonPolygon`..., `GeoJsonGeometry` for any kind. With `openapi`, they are documented as GeoJSON geometries.
 
+The models derive `SimpleObject` and `InputObject` with their geometry fields, and a resolver takes a geometry as argument, here to filter the list as `ListQuery`:
+
+```rust
+#[Object]
+impl PlaceQuery {
+    async fn places(&self, ctx: &Context<'_>, contains: Option<Point>, around: Option<Point>, radius: Option<f64>) -> async_graphql::Result<Vec<Place>> {
+        let near = match around {
+            Some(point) => Some(Near::new(point.x(), point.y(), radius.unwrap_or(1000.0)).map_err(async_graphql::Error::new)?),
+            None => None,
+        };
+        let query = ListQuery { offset: None, limit: None, bbox: None, near, point: contains };
+        Ok(Place::list(&query, app_state(ctx)?).await?)
+    }
+}
+
+#[Object]
+impl PlaceMutation {
+    async fn create_place(&self, ctx: &Context<'_>, input: NewPlace) -> async_graphql::Result<Place> {
+        Ok(input.save(&SaveQuery {}, app_state(ctx)?).await?)
+    }
+}
+```
+
+The geometries are written as GeoJSON object literals in the query, or in the variables:
+
+```graphql
+query Inside($point: GeoJsonPoint!) {
+  places(contains: $point) { id name area }
+}
+
+{ places(around: { type: "Point", coordinates: [2.2945, 48.8584] }, radius: 800) { name location } }
+
+mutation {
+  createPlace(input: {
+    name: "Jardin du Luxembourg"
+    location: { type: "Point", coordinates: [2.3372, 48.8462] }
+    area: {
+      type: "Polygon"
+      coordinates: [[[2.3320, 48.8440], [2.3400, 48.8440], [2.3400, 48.8490], [2.3320, 48.8490], [2.3320, 48.8440]]]
+    }
+  }) { id location area }
+}
+```
+
+```json
+{ "point": { "type": "Point", "coordinates": [2.2945, 48.8584] } }
+```
+
+```json
+{"data":{"places":[{"id":1,"name":"Tour Eiffel","area":{"type":"Polygon","coordinates":[[[2.2932,48.8578],[2.2952,48.8571],[2.2959,48.859],[2.2939,48.8597],[2.2932,48.8578]]]}}]}}
+```
+
+A geometry of another kind than the argument is a GraphQL error: `Failed to parse "GeoJsonPoint": expected a Point, found a LineString`.
+
 ## CLI and reverse engineering
 
 The CLI proposes the geometries in the field types with `--postgres` (`location:postgis::Point`): the migration creates the `postgis` extension, `geometry(Point, 4326)` columns and their GiST indexes. [`octopux-reverse`]({{ '/reverse-engineering/' | relative_url }}) maps the `geometry` and `geography` columns to these types, except the Z and M kinds. See the [`postgis`](https://github.com/ctaque/octopux/tree/main/examples/postgis) example.
