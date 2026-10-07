@@ -33,7 +33,7 @@ sqlx = { version = "0.9", default-features = false, features = ["chrono"], optio
 chrono = { workspace = true, optional = true }
 # Conversions of the PostGIS geometries to and from the types of the `geo` ecosystem
 geo-types = { version = "0.7", optional = true }
-# The GraphQL scalars of the PostGIS geometries, with the `postgis` feature
+# The GraphQL scalars of the PostGIS geometries and of the pgvector vectors
 async-graphql = { version = "7", default-features = false, optional = true }
 
 [features]
@@ -41,7 +41,9 @@ openapi = ["dep:apistos", "dep:schemars"]
 sqlx = ["dep:sqlx", "dep:chrono"]
 # The PostGIS `geometry` and `geography` columns, read and written by the sqlx derives on PostgreSQL
 postgis = ["sqlx", "sqlx/postgres", "dep:geo-types"]
-# With `postgis`, the geometries are GraphQL scalars (async-graphql), GeoJSON as in the REST routes
+# The pgvector `vector`, `halfvec` and `sparsevec` columns, and the similarity search of `SqlxFilter`
+pgvector = ["sqlx", "sqlx/postgres"]
+# With `postgis` or `pgvector`, the geometries and the vectors are GraphQL scalars (async-graphql), as in the REST routes
 graphql = ["dep:async-graphql"]
 
 [dev-dependencies]
@@ -71,3 +73,14 @@ required-features = ["postgis"]
 [[test]]
 name = "graphql_postgis"
 required-features = ["postgis", "graphql"]
+
+# Needs a live PostgreSQL database with pgvector: ignored by `cargo test` and skipped in the CI,
+# run with `cargo test -p octopux --features pgvector --test pgvector -- --ignored`
+[[test]]
+name = "pgvector"
+required-features = ["pgvector"]
+
+# The GraphQL scalars of the vectors, in a schema, without database
+[[test]]
+name = "graphql_pgvector"
+required-features = ["pgvector", "graphql"]

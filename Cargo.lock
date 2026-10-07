@@ -2747,6 +2747,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgvector-api"
+version = "0.1.0"
+dependencies = [
+ "actix-web",
+ "apistos",
+ "apistos-schemars",
+ "async-graphql",
+ "async-graphql-actix-web",
+ "async-trait",
+ "chrono",
+ "dotenvy",
+ "octopux 0.26.0",
+ "serde",
+ "sqlx",
+]
+
+[[package]]
 name = "phc"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

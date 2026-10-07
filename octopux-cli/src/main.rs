@@ -608,15 +608,52 @@ const POSTGIS_TYPES: &[(&str, &str)] = &[
     ("postgis::Geometry", "geometry(Geometry, 4326)"),
 ];
 
-// Whether a field type is a PostGIS geometry, `postgis::Point` or `Option<octopux::postgis::Point>`
-fn is_postgis_type(ty: &str) -> bool {
-    ty.contains("postgis::")
+// pgvector vectors (octopux `pgvector` feature), PostgreSQL only: the field types, written with
+// `use octopux::pgvector;`, and their columns, of the dimensions of common embeddings, asked for each field
+const PGVECTOR_TYPES: &[(&str, &str)] = &[
+    ("pgvector::Vector", "vector(1536)"),
+    ("pgvector::HalfVector", "halfvec(3072)"),
+    ("pgvector::SparseVector", "sparsevec(30522)"),
+];
+
+// A PostgreSQL extension whose types are field types, enabled by the octopux feature named as its module
+struct Extension {
+    // the module of octopux, `postgis`, and its feature
+    module: &'static str,
+    // what its field types are, in the messages
+    what: &'static str,
+    // the extension the migrations create
+    sql_name: &'static str,
+    types: &'static [(&'static str, &'static str)],
 }
 
-// The types of the menu, followed by the PostGIS geometries for PostgreSQL
+const POSTGIS: Extension = Extension { module: "postgis", what: "PostGIS geometries", sql_name: "postgis", types: POSTGIS_TYPES };
+const PGVECTOR: Extension = Extension { module: "pgvector", what: "pgvector vectors", sql_name: "vector", types: PGVECTOR_TYPES };
+const EXTENSIONS: [&Extension; 2] = [&POSTGIS, &PGVECTOR];
+
+impl Extension {
+    // Whether a field type is one of the extension, `postgis::Point` or `Option<octopux::postgis::Point>`
+    fn has_type(&self, ty: &str) -> bool {
+        ty.contains(&format!("{}::", self.module))
+    }
+
+    // Whether a field type names the module (`postgis::Point`), which `use octopux::postgis;` imports,
+    // rather than its whole path (`octopux::postgis::Point`)
+    fn names_module(&self, fields: &[Field]) -> bool {
+        let path = format!("octopux::{}::", self.module);
+        fields.iter().any(|f| self.has_type(&f.ty.replace(&path, "")))
+    }
+}
+
+// The extensions of the types of `fields`
+fn extensions(fields: &[Field]) -> impl Iterator<Item = &'static Extension> + '_ {
+    EXTENSIONS.into_iter().filter(|e| fields.iter().any(|f| e.has_type(&f.ty)))
+}
+
+// The types of the menu, followed by the types of the extensions for PostgreSQL
 fn field_types(dialect: Option<Dialect>) -> Vec<&'static str> {
-    let postgis = POSTGIS_TYPES.iter().map(|(ty, _)| *ty).filter(|_| dialect == Some(Dialect::Postgres));
-    FIELD_TYPES.iter().copied().chain(postgis).collect()
+    let extensions = EXTENSIONS.iter().flat_map(|e| e.types.iter().map(|(ty, _)| *ty)).filter(|_| dialect == Some(Dialect::Postgres));
+    FIELD_TYPES.iter().copied().chain(extensions).collect()
 }
 
 fn field_types_menu(dialect: Option<Dialect>) -> String {
@@ -791,10 +828,13 @@ fn read_new_fields<R: BufRead, W: Write>(
                 }
             }
         };
-        let length = match dialect.and_then(|d| d.sql_column_type(&ty)).and_then(|(sql, _)| varchar_length(sql)) {
+        let sql = dialect.and_then(|d| d.sql_column_type(&ty)).map(|(sql, _)| sql);
+        let length = match (sql.and_then(varchar_length), sql.and_then(vector_dimensions)) {
             // None for the length of the dialect
-            Some(default) => Some(read_length(input, output, &name, dialect.unwrap_or(Dialect::Sqlite), default)?).filter(|l| *l != default),
-            None => None,
+            (Some(default), _) => Some(read_length(input, output, &name, dialect.unwrap_or(Dialect::Sqlite), default)?).filter(|l| *l != default),
+            // None for the dimensions of the type
+            (None, Some((base, default))) => Some(read_dimensions(input, output, &name, base, default)?).filter(|d| *d != default),
+            (None, None) => None,
         };
         let column = dialect.and_then(|d| d.column_type(&ty, length));
         let references = match tables {
@@ -820,6 +860,36 @@ fn read_new_fields<R: BufRead, W: Write>(
 // The length of a `VARCHAR(n)` column type
 fn varchar_length(sql: &str) -> Option<u32> {
     sql.strip_prefix("VARCHAR(")?.strip_suffix(')')?.parse().ok()
+}
+
+// The type and the dimensions of a pgvector column type, `vector(1536)` giving `("vector", 1536)`
+fn vector_dimensions(sql: &str) -> Option<(&str, u32)> {
+    let (base, dimensions) = sql.strip_suffix(')')?.split_once('(')?;
+    if !["vector", "halfvec", "sparsevec"].contains(&base) {
+        return None;
+    }
+    Some((base, dimensions.parse().ok()?))
+}
+
+// Asks for the dimensions of the pgvector column `base` of the field `name`, `default` when empty
+fn read_dimensions<R: BufRead, W: Write>(input: &mut R, output: &mut W, name: &str, base: &str, default: u32) -> Result<u32, Error> {
+    let max = if base == "sparsevec" { 1_000_000_000 } else { 16_000 };
+    loop {
+        let message = format!(
+            "{} {} {} ",
+            cyan("?"),
+            bold(&format!("Dimensions of {} ›", cyan(&format!("`{}`", name)))),
+            dim(&format!("({}, 1 to {}) [{}]", base, max, default))
+        );
+        let answer = match prompt(input, output, &message)? {
+            Some(answer) if !answer.is_empty() => answer,
+            _ => return Ok(default),
+        };
+        match answer.parse::<u32>() {
+            Ok(dimensions) if (1..=max).contains(&dimensions) => return Ok(dimensions),
+            _ => writeln!(output, "{}", failure(&format!("`{}` is not a number of dimensions of a {}, pick 1 to {}", answer, base, max)))?,
+        }
+    }
 }
 
 // Asks for the length of the VARCHAR column of the field `name`, `default` when empty
@@ -876,7 +946,8 @@ fn check_field_type(answer: &str, dialect: Option<Dialect>, menu: Option<Dialect
 fn field_line(field: &Field, width: usize) -> String {
     let nullable = if field.ty.starts_with("Option<") { dim(" (nullable)") } else { String::new() };
     let unique = if field.unique { dim(" (unique)") } else { String::new() };
-    let length = field.length.map_or(String::new(), |l| dim(&format!(" (length {})", l)));
+    let size = if PGVECTOR.has_type(&field.ty) { "dimensions" } else { "length" };
+    let length = field.length.map_or(String::new(), |l| dim(&format!(" ({} {})", size, l)));
     let references = match &field.references {
         Some(r) => format!(" {} {}", dim("→"), magenta(&format!("{} ({})", r.table, r.column))),
         None => String::new(),
@@ -1581,7 +1652,7 @@ fn postgres_types() -> Vec<(&'static str, String)> {
         Vec<DateTime<Utc>>, Vec<NaiveDateTime>, Vec<NaiveDate>, Vec<NaiveTime>, Vec<Vec<u8>>,
     );
     let mut types = with_overrides(types, POSTGRES_OVERRIDES);
-    types.extend(POSTGIS_TYPES.iter().map(|(ty, sql)| (*ty, sql.to_string())));
+    types.extend(EXTENSIONS.iter().flat_map(|e| e.types).map(|(ty, sql)| (*ty, sql.to_string())));
     types
 }
 
@@ -1651,7 +1722,7 @@ impl Dialect {
     }
 
     fn sql_type(self, ty: &str) -> Option<&'static str> {
-        // chrono types and the PostGIS geometries can be written with their path
+        // chrono types and the types of the extensions can be written with their path
         let ty = ty.trim_start_matches("chrono::").trim_start_matches("octopux::");
         self.sql_types().iter().find(|(t, _)| *t == ty).map(|(_, sql)| sql.as_str())
     }
@@ -1671,9 +1742,11 @@ impl Dialect {
         self.sql_column_type(ty).map(|(sql, _)| self.with_length(sql, length))
     }
 
+    // `length` also replaces the dimensions of a pgvector column
     fn with_length(self, sql: &str, length: Option<u32>) -> String {
-        match (varchar_length(sql), length) {
-            (Some(_), Some(length)) => format!("VARCHAR({})", length),
+        match (varchar_length(sql), vector_dimensions(sql), length) {
+            (Some(_), _, Some(length)) => format!("VARCHAR({})", length),
+            (_, Some((base, _)), Some(dimensions)) => format!("{}({})", base, dimensions),
             _ => sql.to_string(),
         }
     }
@@ -1758,7 +1831,7 @@ fn render_migration(name: &str, fields: &[Field], timestamps: bool, dialect: Dia
         f.references.as_ref().map(|r| format!("CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})", foreign_key_name(&table, &f.name), f.name, qualified(schema, &r.table), r.column))
     }));
     let create_schema = schema.map_or(String::new(), |schema| format!("CREATE SCHEMA IF NOT EXISTS {};\n", schema));
-    let (extension, indexes) = postgis_statements(&table, schema, fields, dialect);
+    let (extension, indexes) = extension_statements(&table, schema, fields, dialect);
     Ok(format!(
         "{}{}CREATE TABLE IF NOT EXISTS {} (\n    {}\n);\n{}",
         create_schema,
@@ -1769,18 +1842,32 @@ fn render_migration(name: &str, fields: &[Field], timestamps: bool, dialect: Dia
     ))
 }
 
-// With PostGIS geometries on PostgreSQL, the statement creating the extension, before the columns,
-// and the GiST indexes of the geometry columns, which the spatial filters use, after them
-fn postgis_statements(table: &str, schema: Option<&str>, fields: &[Field], dialect: Dialect) -> (String, String) {
-    let geometries: Vec<&Field> = fields.iter().filter(|f| is_postgis_type(&f.ty)).collect();
-    if dialect != Dialect::Postgres || geometries.is_empty() {
+// With the types of extensions on PostgreSQL, the statements creating the extensions, before the columns,
+// and the indexes of their columns after them: the GiST indexes of the geometries, which the spatial
+// filters use, and the HNSW indexes of the vectors, for the cosine distance of the `nearest` filter
+fn extension_statements(table: &str, schema: Option<&str>, fields: &[Field], dialect: Dialect) -> (String, String) {
+    if dialect != Dialect::Postgres {
         return (String::new(), String::new());
     }
-    let indexes = geometries
+    let created = extensions(fields).map(|e| format!("CREATE EXTENSION IF NOT EXISTS {};\n", e.sql_name)).collect();
+    let index = |f: &Field, using: String| format!("CREATE INDEX IF NOT EXISTS {}_{}_idx ON {} USING {};\n", table, f.name, qualified(schema, table), using);
+    let indexes = fields
         .iter()
-        .map(|f| format!("CREATE INDEX IF NOT EXISTS {}_{}_idx ON {} USING GIST ({});\n", table, f.name, qualified(schema, table), f.name))
+        .filter_map(|f| {
+            if POSTGIS.has_type(&f.ty) {
+                return Some(index(f, format!("GIST ({})", f.name)));
+            }
+            let column = dialect.column_type(&f.ty, f.length)?;
+            let (base, dimensions) = vector_dimensions(&column)?;
+            // the most dimensions HNSW indexes
+            Some(match (base, dimensions) {
+                ("vector", 2001..) => format!("-- no index on {}: HNSW indexes a vector of at most 2000 dimensions, a halfvec of at most 4000\n", f.name),
+                ("halfvec", 4001..) => format!("-- no index on {}: HNSW indexes a halfvec of at most 4000 dimensions\n", f.name),
+                _ => index(f, format!("hnsw ({} {}_cosine_ops)", f.name, base)),
+            })
+        })
         .collect();
-    ("CREATE EXTENSION IF NOT EXISTS postgis;\n".to_string(), indexes)
+    (created, indexes)
 }
 
 // `name TYPE [NOT NULL]`, the column of a field, None when its type has no column type in the `dialect` database
@@ -1819,7 +1906,7 @@ fn unique_index_name(table: &str, column: &str) -> String {
 fn render_add_columns(table: &str, fields: &[Field], defaults: &[(String, String)], dialect: Dialect, schema: Option<&str>) -> Result<String, String> {
     let columns = column_definitions(fields, dialect)?;
     let sql_table = qualified(schema, table);
-    let (extension, indexes) = postgis_statements(table, schema, fields, dialect);
+    let (extension, indexes) = extension_statements(table, schema, fields, dialect);
     let mut sql = extension;
     for (field, column) in fields.iter().zip(columns) {
         sql += &format!("ALTER TABLE {} ADD COLUMN {}", sql_table, column);
@@ -2115,37 +2202,46 @@ fn chrono_imports(fields: &[Field], timestamps: bool) -> String {
     }
 }
 
-// Why the PostGIS geometries among `fields` cannot be generated: they are PostgreSQL types
-fn postgis_error(fields: &[Field], dialect: Dialect) -> Option<String> {
-    let geometries: Vec<&str> = fields.iter().filter(|f| is_postgis_type(&f.ty)).map(|f| f.name.as_str()).collect();
-    if geometries.is_empty() || dialect == Dialect::Postgres {
-        None
-    } else {
-        Some(format!("the PostGIS geometries ({}) require --postgres", geometries.join(", ")))
+// Why the types of extensions among `fields` cannot be generated: they are PostgreSQL types
+fn extension_error(fields: &[Field], dialect: Dialect) -> Option<String> {
+    if dialect == Dialect::Postgres {
+        return None;
     }
+    let errors: Vec<String> = extensions(fields)
+        .map(|e| {
+            let names: Vec<&str> = fields.iter().filter(|f| e.has_type(&f.ty)).map(|f| f.name.as_str()).collect();
+            format!("the {} ({}) require --postgres", e.what, names.join(", "))
+        })
+        .collect();
+    (!errors.is_empty()).then(|| errors.join(", "))
 }
 
-// How to enable the octopux features the geometry fields need, None without geometry: `postgis`,
-// and `graphql` for the GraphQL scalars of the geometries of a model generated with --graphql
-fn postgis_hint(fields: &[Field], graphql: bool) -> Option<String> {
-    fields.iter().any(|f| is_postgis_type(&f.ty)).then(|| {
-        let (features, scalars) = if graphql { ("postgis,graphql", " and their GraphQL scalars") } else { ("postgis", "") };
-        highlight(&format!(
-            "  The PostGIS geometries{} need the octopux features `{}`: `cargo add octopux --features {}`",
-            scalars, features, features
-        ))
-    })
+// How to enable the octopux features the fields of extensions need, None without them: `postgis`, `pgvector`,
+// and `graphql` for their GraphQL scalars in a model generated with --graphql
+fn extension_hint(fields: &[Field], graphql: bool) -> Option<String> {
+    let used: Vec<&Extension> = extensions(fields).collect();
+    if used.is_empty() {
+        return None;
+    }
+    let what: Vec<&str> = used.iter().map(|e| e.what).collect();
+    let mut features: Vec<&str> = used.iter().map(|e| e.module).collect();
+    let scalars = if graphql { " and their GraphQL scalars" } else { "" };
+    if graphql {
+        features.push("graphql");
+    }
+    let features = features.join(",");
+    Some(highlight(&format!(
+        "  The {}{} need the octopux features `{}`: `cargo add octopux --features {}`",
+        what.join(" and the "),
+        scalars,
+        features,
+        features
+    )))
 }
 
-// Whether a field type names the `postgis` module (`postgis::Point`), which `use octopux::postgis;` imports,
-// rather than its whole path (`octopux::postgis::Point`)
-fn uses_postgis_module(fields: &[Field]) -> bool {
-    fields.iter().any(|f| f.ty.replace("octopux::postgis::", "").contains("postgis::"))
-}
-
-// The import of the `postgis` module named by the geometry fields, empty when none names it
-fn postgis_import(fields: &[Field]) -> &'static str {
-    if uses_postgis_module(fields) { "\n    use octopux::postgis;" } else { "" }
+// The imports of the modules of extensions named by the fields (`use octopux::postgis;`), empty when none names one
+fn extension_imports(fields: &[Field]) -> String {
+    EXTENSIONS.iter().filter(|e| e.names_module(fields)).map(|e| format!("\n    use octopux::{};", e.module)).collect()
 }
 
 // Keywords a field can be named after as a raw identifier (`r#type`), its column keeps the plain name
@@ -2217,7 +2313,7 @@ fn render_table_model(name: &str, table: Option<&str>, schema: Option<&str>, ope
     let field_lines = struct_fields(fields);
     // keeps the blank line of the empty creatable struct
     let new_fields = if fields.is_empty() { "\n" } else { &field_lines };
-    let chrono_imports = chrono_imports(fields, timestamps) + postgis_import(fields);
+    let chrono_imports = chrono_imports(fields, timestamps) + &extension_imports(fields);
     let (model_fields, updatable_fields) = if timestamps {
         let timestamp = |name: &str| Field { name: name.to_string(), ty: TIMESTAMP_TYPE.to_string(), references: None, unique: false, length: None };
         (
@@ -2883,7 +2979,7 @@ fn with_added_fields(source: &str, model: &str, fields: &[Field]) -> Result<Stri
         }
     }
     edits.extend(chrono_import_edit(source, &file, fields));
-    edits.extend(postgis_import_edit(source, &file, fields));
+    edits.extend(EXTENSIONS.iter().filter_map(|e| extension_import_edit(source, &file, fields, e)));
     // from the end, so that the offsets of the other edits stay valid
     edits.sort_by_key(|(pos, _)| std::cmp::Reverse(*pos));
     let mut patched = source.to_string();
@@ -2957,25 +3053,26 @@ fn imports_module(tree: &syn::UseTree, module: &str) -> bool {
     }
 }
 
-// The edit importing the `postgis` module named by the geometry `fields` when the file does not import it yet,
-// in a new `use` after the last one
-fn postgis_import_edit(source: &str, file: &syn::File, fields: &[Field]) -> Option<(usize, String)> {
+// The edit importing the module of the `extension` named by the `fields` (`use octopux::postgis;`) when the file
+// does not import it yet, in a new `use` after the last one
+fn extension_import_edit(source: &str, file: &syn::File, fields: &[Field], extension: &Extension) -> Option<(usize, String)> {
     let uses: Vec<&syn::ItemUse> = file.items.iter().filter_map(|item| match item {
         syn::Item::Use(u) => Some(u),
         _ => None,
     }).collect();
-    if !uses_postgis_module(fields) || uses.iter().any(|u| imports_module(&u.tree, "postgis")) {
+    if !extension.names_module(fields) || uses.iter().any(|u| imports_module(&u.tree, extension.module)) {
         return None;
     }
+    let import = format!("use octopux::{};", extension.module);
     match uses.last() {
         Some(last) => {
             let indent = line_indent(source, last.span().byte_range().start).1.unwrap_or_default();
-            Some((last.semi_token.span().byte_range().end, format!("\n{}use octopux::postgis;", indent)))
+            Some((last.semi_token.span().byte_range().end, format!("\n{}{}", indent, import)))
         }
         None => {
             let first = file.items.first()?.span().byte_range().start;
             let (start, indent) = line_indent(source, first);
-            Some((start, format!("{}use octopux::postgis;\n", indent.unwrap_or_default())))
+            Some((start, format!("{}{}\n", indent.unwrap_or_default(), import)))
         }
     }
 }
@@ -3007,7 +3104,7 @@ fn add_fields<R: BufRead, W: Write>(
     if fields.is_empty() {
         fail(format!("No field entered, {} unchanged", path));
     }
-    if let Some(error) = postgis_error(&fields, dialect) {
+    if let Some(error) = extension_error(&fields, dialect) {
         fail(format!("{}, no field added", error));
     }
     let mut defaults = Vec::new();
@@ -3045,7 +3142,7 @@ fn add_fields<R: BufRead, W: Write>(
         writeln!(output, "{}", warning(&format!("{} does not derive SqlxModel, add the columns to the queries of its model functions", model)))?;
     }
     // the GraphQL types of the model are derived with SimpleObject
-    if let Some(hint) = postgis_hint(&fields, source.contains("SimpleObject")) {
+    if let Some(hint) = extension_hint(&fields, source.contains("SimpleObject")) {
         writeln!(output, "{}", hint)?;
     }
     if let Some((migration, sql)) = migration {
@@ -3271,7 +3368,7 @@ fn run(opt: Opt) -> Result<(), Error> {
                 eprintln!("{}", failure(&format!("--graphql needs at least one field, model {} not generated", name)));
                 process::exit(1);
             }
-            if let Some(error) = postgis_error(&fields, dialect) {
+            if let Some(error) = extension_error(&fields, dialect) {
                 eprintln!("{}", failure(&format!("{}, model {} not generated", error, name)));
                 process::exit(1);
             }
@@ -3298,7 +3395,7 @@ fn run(opt: Opt) -> Result<(), Error> {
             }
             write_source(&path, &render_table_model(&name, Some(&table), schema.as_deref(), openapi, graphql, sqlx, timestamps, &fields, dialect))?;
             println!("{}", success(&format!("Successfully generated model {}, declare it with `mod {};`", path, module)));
-            if let Some(hint) = postgis_hint(&fields, graphql) {
+            if let Some(hint) = extension_hint(&fields, graphql) {
                 println!("{}", hint);
             }
             if graphql {
@@ -4837,7 +4934,7 @@ ALTER TABLE book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERE
     fn postgres_menu_proposes_the_postgis_geometries() {
         assert_eq!(parse_field_type("12", Some(Dialect::Postgres)), Some("postgis::Point".into()));
         assert_eq!(parse_field_type("19?", Some(Dialect::Postgres)), Some("Option<postgis::Geometry>".into()));
-        assert_eq!(parse_field_type("20", Some(Dialect::Postgres)), None);
+        assert_eq!(parse_field_type("23", Some(Dialect::Postgres)), None);
         assert_eq!(parse_field_type("12", Some(Dialect::Sqlite)), None);
         assert_eq!(parse_field_type("12", None), None);
         assert!(super::field_types_menu(Some(Dialect::Postgres)).contains("postgis::MultiPolygon"));
@@ -4905,13 +5002,87 @@ CREATE INDEX IF NOT EXISTS place_zone_idx ON place USING GIST (zone);
     }
 
     #[test]
+    fn postgres_menu_proposes_the_pgvector_vectors_and_asks_their_dimensions() {
+        assert_eq!(parse_field_type("20", Some(Dialect::Postgres)), Some("pgvector::Vector".into()));
+        assert_eq!(parse_field_type("22?", Some(Dialect::Postgres)), Some("Option<pgvector::SparseVector>".into()));
+        assert!(!super::field_types_menu(Some(Dialect::Sqlite)).contains("pgvector"));
+        assert_eq!(Dialect::Postgres.sql_column_type("Option<octopux::pgvector::HalfVector>"), Some(("halfvec(3072)", false)));
+        assert_eq!(Dialect::Postgres.column_type("pgvector::Vector", Some(384)).as_deref(), Some("vector(384)"));
+        assert_eq!(Dialect::Mysql.sql_column_type("pgvector::Vector"), None);
+        // too many dimensions, then 384, the default dimensions of the halfvec
+        let mut output = Vec::new();
+        let input = "embedding:pgvector::Vector\n20000\n384\nsmall:21\n\n\n";
+        let fields = read_fields(&mut input.as_bytes(), &mut output, false, Some(Dialect::Postgres), Some(Dialect::Postgres), None, false).unwrap();
+        assert_eq!(fields, [Field { length: Some(384), ..field("embedding", "pgvector::Vector") }, field("small", "pgvector::HalfVector")]);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("`20000` is not a number of dimensions of a vector, pick 1 to 16000"), "{}", output);
+        assert!(output.contains("embedding: pgvector::Vector (dimensions 384)"), "{}", output);
+        // without --migration, no dimensions are asked
+        let fields = read_fields(&mut "embedding:20\n\n".as_bytes(), &mut Vec::new(), false, None, Some(Dialect::Postgres), None, false).unwrap();
+        assert_eq!(fields, [field("embedding", "pgvector::Vector")]);
+    }
+
+    #[test]
+    fn pgvector_migration_creates_the_extension_and_the_hnsw_indexes() {
+        let fields = [
+            Field { length: Some(384), ..field("embedding", "pgvector::Vector") },
+            field("small", "Option<octopux::pgvector::HalfVector>"),
+            field("keywords", "Option<pgvector::SparseVector>"),
+            Field { length: Some(3072), ..field("large", "Option<pgvector::Vector>") },
+            field("location", "postgis::Point"),
+        ];
+        assert_eq!(render_migration("document", &fields, false, Dialect::Postgres, None).unwrap(), "CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE TABLE IF NOT EXISTS document (
+    id BIGSERIAL PRIMARY KEY,
+    embedding vector(384) NOT NULL,
+    small halfvec(3072),
+    keywords sparsevec(30522),
+    large vector(3072),
+    location geometry(Point, 4326) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS document_embedding_idx ON document USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS document_small_idx ON document USING hnsw (small halfvec_cosine_ops);
+CREATE INDEX IF NOT EXISTS document_keywords_idx ON document USING hnsw (keywords sparsevec_cosine_ops);
+-- no index on large: HNSW indexes a vector of at most 2000 dimensions, a halfvec of at most 4000
+CREATE INDEX IF NOT EXISTS document_location_idx ON document USING GIST (location);
+");
+        let added = [field("embedding", "Option<pgvector::Vector>")];
+        assert_eq!(render_add_columns("document", &added, &[], Dialect::Postgres, Some("ai")).unwrap(), "CREATE EXTENSION IF NOT EXISTS vector;
+ALTER TABLE ai.document ADD COLUMN embedding vector(1536);
+CREATE INDEX IF NOT EXISTS document_embedding_idx ON ai.document USING hnsw (embedding vector_cosine_ops);
+");
+        // the vector columns are read back from the migration
+        let tables = parse_tables(&render_migration("document", &fields, false, Dialect::Postgres, None).unwrap());
+        assert_eq!(tables[0].columns[1].sql_type, "vector(384)");
+    }
+
+    #[test]
+    fn pgvector_fields_import_the_module_and_require_postgres() {
+        let fields = [field("embedding", "pgvector::Vector"), field("location", "Option<postgis::Point>")];
+        let source = model_file(&fields, false, true, false, Dialect::Postgres);
+        assert!(source.contains("\n    use octopux::postgis;\n    use octopux::pgvector;\n"), "{}", source);
+        let source = model_file(&[field("title", "String")], false, true, false, Dialect::Postgres);
+        let patched = with_added_fields(&source, "BookPage", &fields[..1]).unwrap();
+        assert!(patched.contains("    use octopux::gen_endpoint;\n    use octopux::pgvector;\n"), "{}", patched);
+        assert_eq!(with_added_fields(&patched, "BookPage", &[field("small", "pgvector::HalfVector")]).unwrap().matches("use octopux::pgvector;").count(), 1);
+        assert_eq!(
+            super::extension_error(&fields, Dialect::Mysql),
+            Some("the PostGIS geometries (location) require --postgres, the pgvector vectors (embedding) require --postgres".into())
+        );
+        let hint = super::extension_hint(&fields, true).unwrap();
+        assert!(hint.contains("The PostGIS geometries and the pgvector vectors and their GraphQL scalars need"), "{}", hint);
+        assert!(hint.contains("`cargo add octopux --features postgis,pgvector,graphql`"), "{}", hint);
+    }
+
+    #[test]
     fn postgis_fields_require_postgres_and_their_features() {
         let fields = [field("title", "String"), field("location", "postgis::Point")];
-        assert_eq!(super::postgis_error(&fields, Dialect::Postgres), None);
-        assert_eq!(super::postgis_error(&fields, Dialect::Sqlite), Some("the PostGIS geometries (location) require --postgres".into()));
-        assert_eq!(super::postgis_error(&fields[..1], Dialect::Sqlite), None);
-        assert!(super::postgis_hint(&fields, false).unwrap().contains("`cargo add octopux --features postgis`"));
-        assert!(super::postgis_hint(&fields, true).unwrap().contains("`cargo add octopux --features postgis,graphql`"));
-        assert_eq!(super::postgis_hint(&fields[..1], true), None);
+        assert_eq!(super::extension_error(&fields, Dialect::Postgres), None);
+        assert_eq!(super::extension_error(&fields, Dialect::Sqlite), Some("the PostGIS geometries (location) require --postgres".into()));
+        assert_eq!(super::extension_error(&fields[..1], Dialect::Sqlite), None);
+        assert!(super::extension_hint(&fields, false).unwrap().contains("`cargo add octopux --features postgis`"));
+        assert!(super::extension_hint(&fields, true).unwrap().contains("`cargo add octopux --features postgis,graphql`"));
+        assert_eq!(super::extension_hint(&fields[..1], true), None);
     }
 }

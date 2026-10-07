@@ -138,6 +138,8 @@ mod error;
 pub mod openapi;
 #[cfg(feature = "postgis")]
 pub mod postgis;
+#[cfg(feature = "pgvector")]
+pub mod pgvector;
 
 pub use error::Error;
 
@@ -183,22 +185,17 @@ pub mod __private {
     pub trait ViaBeforeSave { fn kind(&self) -> Run { Run } }
     pub trait ViaNothing { fn kind(&self) -> Skip { Skip } }
 
-    // `ORDER BY` clause of the `sort` value of a list query, called by the `SqlxFilter` derive;
-    // `direction`, `asc` or `desc`, orders the columns that are not prefixed with `-`
-    #[cfg(feature = "sqlx")]
-    pub fn push_order_by<DB: sqlx::Database>(
-        qb: &mut sqlx::QueryBuilder<DB>,
-        sort: Option<&str>,
-        direction: Option<&str>,
-        columns: &[&str],
-    ) -> anyhow::Result<bool> {
+    // The terms of the `ORDER BY` clause of the `sort` value of a list query, `price DESC, name ASC`,
+    // called by the `SqlxFilter` derive; `direction`, `asc` or `desc`, orders the columns that are
+    // not prefixed with `-`
+    pub fn sort_terms(sort: Option<&str>, direction: Option<&str>, columns: &[&str]) -> anyhow::Result<Option<String>> {
         let default = match direction {
             None => "ASC",
             Some(d) if d.eq_ignore_ascii_case("asc") => "ASC",
             Some(d) if d.eq_ignore_ascii_case("desc") => "DESC",
             Some(d) => return Err(crate::Error::BadRequest(format!("invalid sort direction `{}`, use asc or desc", d)).into()),
         };
-        let Some(sort) = sort else { return Ok(false) };
+        let Some(sort) = sort else { return Ok(None) };
         let mut terms: Vec<(&str, &str)> = Vec::new();
         for term in sort.split(',').map(str::trim) {
             let (column, direction) = match term.strip_prefix('-') {
@@ -214,8 +211,7 @@ pub mod __private {
             terms.push((column, direction));
         }
         let terms: Vec<String> = terms.iter().map(|(c, d)| format!("{} {}", c, d)).collect();
-        qb.push(" ORDER BY ").push(terms.join(", "));
-        Ok(true)
+        Ok(Some(terms.join(", ")))
     }
 
     use crate::{BeforeSave, HasMany, RestfulPathInfo};
@@ -401,6 +397,10 @@ pub trait BeforeSave<AppState>: Sized {
 /// Only the columns of the attribute are accepted. The `Option<String>` field marked
 /// `#[sqlx_filter(sort_direction)]`, `asc` or `desc`, orders the columns not prefixed with `-`
 /// (`?sort=price,name&order=desc`), in ascending order without it.
+///
+/// On PostgreSQL, the spatial operators of PostGIS filter the geometries (see [`postgis`], `postgis`
+/// feature), and `op = "nearest"` orders the rows by the distance of a pgvector column to the vector
+/// of the field, nearest first and before the sort columns (see [`pgvector`], `pgvector` feature).
 ///
 /// ```ignore
 ///

@@ -7,4 +7,4 @@ permalink: /guides/
 
 # Guides
 
-Configure the sqlx derives, transform payloads, filter and sort lists, declare relations, serve GraphQL, answer errors and store PostGIS geometries.
+Configure the sqlx derives, transform payloads, filter and sort lists, declare relations, serve GraphQL, answer errors, store PostGIS geometries and search pgvector embeddings.

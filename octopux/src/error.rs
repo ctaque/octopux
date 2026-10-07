@@ -16,8 +16,8 @@ use std::fmt;
 /// ```
 ///
 /// Any other error answers 500 `INTERNAL_ERROR`, its message being logged instead of sent,
-/// except the sqlx errors telling that the row is missing (404) or that a constraint of
-/// the table is violated (400 or 409).
+/// except the sqlx errors telling that the row is missing (404), that a constraint of
+/// the table is violated (400 or 409) or that a value is refused by its column (400).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// 404 `ENTITY_NOT_FOUND`: no entity has this id
@@ -109,6 +109,11 @@ fn sqlx_error(error: &sqlx::Error) -> Option<Error> {
             }
             ErrorKind::NotNullViolation | ErrorKind::CheckViolation => {
                 Some(Error::BadRequest("the payload violates a constraint of the table".to_string()))
+            }
+            // the data exceptions of SQL (class 22): a value out of the range of its column, a
+            // string too long, a vector of other dimensions than its pgvector column...
+            _ if db.code().map_or(false, |code| code.starts_with("22")) => {
+                Some(Error::BadRequest("a value of the request is refused by its column".to_string()))
             }
             _ => None,
         },
