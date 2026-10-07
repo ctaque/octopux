@@ -8,7 +8,7 @@ use octopux::{
     HttpCreate, HttpFindListDelete, HttpUpdate, Model, NewModel, UpdatableModel,
 };
 use actix_web::{http::StatusCode, test, web, App};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use apistos::app::OpenApiWrapper;
 use apistos::info::Info;
 use apistos::spec::Spec;
@@ -51,7 +51,7 @@ impl Model<Id, FindQuery, ListQuery, Vec<Item>, DeleteQuery, Item, AppState> for
     async fn find(id: Id, _query: &FindQuery, _state: &AppState) -> Result<Box<Item>> {
         match id {
             1 => Ok(Box::new(Item { id, content: "one".into() })),
-            _ => Err(anyhow!("item {} not found", id)),
+            _ => Err(octopux::Error::NotFound.into()),
         }
     }
     async fn list(_query: &ListQuery, _state: &AppState) -> Result<Vec<Item>> {
@@ -246,7 +246,7 @@ async fn find_documents_path_and_query_parameters_and_responses() {
     assert_eq!(parameter_names(find), [("path", "id"), ("query", "expand")]);
     assert_eq!(find["parameters"][0]["schema"]["type"], "integer");
     assert_eq!(find["parameters"][0]["required"], true);
-    assert_eq!(response_codes(find), ["200", "404"]);
+    assert_eq!(response_codes(find), ["200", "404", "500"]);
     assert_eq!(
         find["responses"]["200"]["content"]["application/json"]["schema"],
         json!({ "$ref": "#/components/schemas/Item" })
@@ -259,7 +259,7 @@ async fn list_documents_an_inline_array_of_models() {
     let list = &doc["paths"]["/v1/item"]["get"];
 
     assert_eq!(parameter_names(list), [("query", "limit"), ("query", "offset")]);
-    assert_eq!(response_codes(list), ["200", "500"]);
+    assert_eq!(response_codes(list), ["200", "400", "500"]);
     assert_eq!(
         list["responses"]["200"]["content"]["application/json"]["schema"],
         json!({ "type": "array", "items": { "$ref": "#/components/schemas/Item" } })
@@ -303,7 +303,8 @@ async fn create_and_update_document_their_payloads() {
         json!({ "$ref": "#/components/schemas/UpdatableItem" })
     );
     assert_eq!(parameter_names(update), [("path", "id")]);
-    assert_eq!(response_codes(update), ["200", "400", "404", "500"]);
+    assert_eq!(response_codes(create), ["200", "400", "409", "500"]);
+    assert_eq!(response_codes(update), ["200", "400", "404", "409", "500"]);
 }
 
 #[actix_web::test]
@@ -313,7 +314,35 @@ async fn components_hold_the_model_schemas() {
 
     let mut names: Vec<&str> = schemas.keys().map(String::as_str).collect();
     names.sort();
-    assert_eq!(names, ["Item", "NewItem", "Note", "UpdatableItem"]);
+    assert_eq!(names, ["Item", "NewItem", "Note", "OctopuxError", "UpdatableItem"]);
     assert_eq!(schemas["Item"]["type"], "object");
     assert_eq!(schemas["Item"]["required"], json!(["content", "id"]));
+}
+
+#[actix_web::test]
+async fn error_responses_reference_the_error_schema() {
+    let doc = openapi().await;
+    let error = json!({ "$ref": "#/components/schemas/OctopuxError" });
+
+    for (path, method) in [
+        ("/v1/item/{id}", "get"),
+        ("/v1/item/{id}", "put"),
+        ("/v1/item/{id}", "delete"),
+        ("/v1/item", "get"),
+        ("/v1/item", "post"),
+        ("/v1/item/{id}/notes", "get"),
+    ] {
+        let responses = doc["paths"][path][method]["responses"].as_object().unwrap();
+        for (code, response) in responses.iter().filter(|(code, _)| *code != "200") {
+            assert_eq!(response["content"]["application/json"]["schema"], error, "{} {} {}", method, path, code);
+        }
+    }
+
+    let schema = &doc["components"]["schemas"]["OctopuxError"];
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["required"], json!(["code", "message"]));
+    assert_eq!(
+        schema["properties"]["code"]["enum"],
+        json!(["ENTITY_NOT_FOUND", "ID_MISMATCH", "BAD_REQUEST", "CONFLICT", "INTERNAL_ERROR"])
+    );
 }

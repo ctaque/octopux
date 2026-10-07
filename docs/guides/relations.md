@@ -21,7 +21,7 @@ impl HasMany for ProjectBooks {
     const RELATION: &'static str = "books";
 
     async fn list_related(id: Id, query: &ProjectBooksQuery, state: &AppState) -> Result<Option<Vec<Book>>> {
-        // `None` answers 404 when the project does not exist
+        // `None` answers 404 `ENTITY_NOT_FOUND` when the project does not exist
     }
 }
 ```

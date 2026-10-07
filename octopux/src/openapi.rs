@@ -9,13 +9,16 @@
 //! Every type exposed by a route (models, query structs, list and delete results) must implement
 //! [`ApiComponent`], usually with `#[derive(JsonSchema, ApiComponent)]` from apistos.
 
-use crate::{HasMany, Model, NewModel, RestfulPathInfo, UpdatableModel};
+use crate::error::INTERNAL_ERROR;
+use crate::{Error, HasMany, Model, NewModel, RestfulPathInfo, UpdatableModel};
 use actix_web::{web, FromRequest, Handler, Responder};
 use apistos::actix::ResponseWrapper;
 use apistos::components::Components;
 use apistos::paths::{MediaType, Operation, Response, Responses};
 use apistos::reference_or::ReferenceOr;
-use apistos::{ApiComponent, InstanceType, PathItemDefinition, Schema, SingleOrVec};
+use apistos::{
+    ApiComponent, InstanceType, Metadata, ObjectValidation, PathItemDefinition, Schema, SchemaObject, SingleOrVec,
+};
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
@@ -116,7 +119,8 @@ where
             [web::Path::<ID>::parameters(), web::Query::<FQ>::parameters()],
         );
         add_response(&mut operation, "200", json_response::<M>(format!("The {} found", path)));
-        add_response(&mut operation, "404", text_response("ENTITY_NOT_FOUND: no entity has this id"));
+        add_response(&mut operation, "404", error_response("ENTITY_NOT_FOUND: no entity has this id"));
+        add_response(&mut operation, "500", error_response("INTERNAL_ERROR: the search failed"));
         operation
     }
 
@@ -140,7 +144,8 @@ where
             [web::Query::<LQ>::parameters()],
         );
         add_response(&mut operation, "200", json_response::<LR>(format!("The {} entities", path)));
-        add_response(&mut operation, "500", text_response("The listing failed"));
+        add_response(&mut operation, "400", error_response("BAD_REQUEST: the filters or the sort are invalid"));
+        add_response(&mut operation, "500", error_response("INTERNAL_ERROR: the listing failed"));
         operation
     }
 
@@ -165,8 +170,9 @@ where
             [web::Path::<ID>::parameters(), web::Query::<DQ>::parameters()],
         );
         add_response(&mut operation, "200", json_response::<DR>(format!("The deleted {}", path)));
-        add_response(&mut operation, "404", text_response("ENTITY_NOT_FOUND: no entity has this id"));
-        add_response(&mut operation, "500", text_response("The deletion failed"));
+        add_response(&mut operation, "404", error_response("ENTITY_NOT_FOUND: no entity has this id"));
+        add_response(&mut operation, "409", error_response("CONFLICT: the entity is referenced by another one"));
+        add_response(&mut operation, "500", error_response("INTERNAL_ERROR: the deletion failed"));
         operation
     }
 
@@ -192,7 +198,9 @@ where
         );
         operation.request_body = web::Json::<N>::request_body().map(ReferenceOr::Object);
         add_response(&mut operation, "200", json_response::<T>(format!("The created {}", path)));
-        add_response(&mut operation, "500", text_response("The creation failed"));
+        add_response(&mut operation, "400", error_response("BAD_REQUEST: the payload is invalid"));
+        add_response(&mut operation, "409", error_response("CONFLICT: a unique value is already taken, or a referenced entity is missing"));
+        add_response(&mut operation, "500", error_response("INTERNAL_ERROR: the creation failed"));
         operation
     }
 
@@ -219,9 +227,14 @@ where
         );
         operation.request_body = web::Json::<U>::request_body().map(ReferenceOr::Object);
         add_response(&mut operation, "200", json_response::<T>(format!("The updated {}", path)));
-        add_response(&mut operation, "400", text_response("ID_MISMATCH: the payload id differs from the path id"));
-        add_response(&mut operation, "404", text_response("ENTITY_NOT_FOUND: no entity has this id"));
-        add_response(&mut operation, "500", text_response("The update failed"));
+        add_response(
+            &mut operation,
+            "400",
+            error_response("ID_MISMATCH: the payload id differs from the path id, BAD_REQUEST: the payload is invalid"),
+        );
+        add_response(&mut operation, "404", error_response("ENTITY_NOT_FOUND: no entity has this id"));
+        add_response(&mut operation, "409", error_response("CONFLICT: a unique value is already taken, or a referenced entity is missing"));
+        add_response(&mut operation, "500", error_response("INTERNAL_ERROR: the update failed"));
         operation
     }
 
@@ -248,8 +261,8 @@ where
         // Unique among the relations of the model: `list_{path}_{relation}`
         operation.operation_id = Some(operation_id("list", &format!("{}/{}", path, R::RELATION)));
         add_response(&mut operation, "200", json_response::<R::Result>(format!("The {} of the {}", R::RELATION, path)));
-        add_response(&mut operation, "404", text_response("ENTITY_NOT_FOUND: no parent entity has this id"));
-        add_response(&mut operation, "500", text_response("The listing failed"));
+        add_response(&mut operation, "404", error_response("ENTITY_NOT_FOUND: no parent entity has this id"));
+        add_response(&mut operation, "500", error_response("INTERNAL_ERROR: the listing failed"));
         operation
     }
 
@@ -362,12 +375,59 @@ fn json_response<T: ApiComponent>(description: String) -> Response {
     }
 }
 
-fn text_response(description: &str) -> Response {
+/// The name of the schema of the error body in the components
+const ERROR_SCHEMA: &str = "OctopuxError";
+
+fn error_response(description: &str) -> Response {
     Response {
         description: description.to_string(),
-        content: BTreeMap::from([("text/plain".to_string(), MediaType::default())]),
+        content: BTreeMap::from([(
+            "application/json".to_string(),
+            MediaType {
+                schema: Some(ReferenceOr::Reference {
+                    _ref: format!("#/components/schemas/{}", ERROR_SCHEMA),
+                }),
+                ..Default::default()
+            },
+        )]),
         ..Default::default()
     }
+}
+
+/// The schema of the body of [`crate::Error`]: `{"code": "ENTITY_NOT_FOUND", "message": "..."}`
+fn error_schema() -> NamedSchema {
+    let string = |description: &str, values: Option<Vec<serde_json::Value>>| {
+        Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            enum_values: values,
+            metadata: Some(Box::new(Metadata {
+                description: Some(description.to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    };
+    let codes = [
+        Error::NotFound.code(),
+        Error::IdMismatch.code(),
+        Error::BadRequest(String::new()).code(),
+        Error::Conflict(String::new()).code(),
+        INTERNAL_ERROR,
+    ];
+    let mut object = ObjectValidation::default();
+    object.properties.insert(
+        "code".to_string(),
+        string("Stable code of the error", Some(codes.iter().map(|c| serde_json::Value::from(*c)).collect())),
+    );
+    object.properties.insert("message".to_string(), string("Human readable description of the error", None));
+    object.required.insert("code".to_string());
+    object.required.insert("message".to_string());
+    let schema = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Object.into()),
+        object: Some(Box::new(object)),
+        ..Default::default()
+    });
+    (ERROR_SCHEMA.to_string(), ReferenceOr::Object(schema))
 }
 
 fn is_array(schema: &Schema) -> bool {
@@ -391,7 +451,7 @@ fn components(schemas: &[(Vec<NamedSchema>, Vec<NamedSchema>)]) -> Vec<Component
     let top_level = schemas.iter().flat_map(|(schemas, _)| schemas.iter().cloned());
     let children = schemas.iter().flat_map(|(_, children)| children.iter().cloned());
     vec![Components {
-        schemas: top_level.chain(children).collect(),
+        schemas: top_level.chain(children).chain([error_schema()]).collect(),
         ..Default::default()
     }]
 }

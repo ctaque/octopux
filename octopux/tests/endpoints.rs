@@ -14,6 +14,7 @@ use actix_web::{
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -24,8 +25,11 @@ type Id = i64;
 #[derive(Default)]
 struct AppState {
     items: Mutex<BTreeMap<Id, Item>>,
+    fail_find: AtomicBool,
     fail_list: AtomicBool,
     fail_save: AtomicBool,
+    /// Makes `save` answer the client error
+    reject_save: Mutex<Option<octopux::Error>>,
     fail_update: AtomicBool,
     fail_delete: AtomicBool,
     update_calls: AtomicUsize,
@@ -92,6 +96,9 @@ struct Item {
 impl Model<Id, FindQuery, ListQuery, ListResult, DeleteQuery, Item, AppState> for Item {
     async fn find(id: Id, query: &FindQuery, state: &AppState) -> Result<Box<Item>> {
         *state.last_find_query.lock().unwrap() = Some(query.clone());
+        if state.fail_find.load(Ordering::SeqCst) {
+            return Err(anyhow!("find failed"));
+        }
         state
             .items
             .lock()
@@ -99,7 +106,7 @@ impl Model<Id, FindQuery, ListQuery, ListResult, DeleteQuery, Item, AppState> fo
             .get(&id)
             .cloned()
             .map(Box::new)
-            .ok_or_else(|| anyhow!("item {} not found", id))
+            .ok_or_else(|| octopux::Error::NotFound.into())
     }
 
     async fn list(query: &ListQuery, state: &AppState) -> Result<ListResult> {
@@ -144,6 +151,9 @@ impl NewModel<Item, SaveQuery, AppState> for NewItem {
         if state.fail_save.load(Ordering::SeqCst) {
             return Err(anyhow!("save failed"));
         }
+        if let Some(error) = state.reject_save.lock().unwrap().clone() {
+            return Err(error.into());
+        }
         let mut store = state.items.lock().unwrap();
         let id = store.keys().max().copied().unwrap_or(0) + 1;
         let item = Item {
@@ -173,7 +183,7 @@ impl UpdatableModel<UpdatableItem, UpdateQuery, AppState> for UpdatableItem {
         let mut store = state.items.lock().unwrap();
         let item = store
             .get_mut(&self.id)
-            .ok_or_else(|| anyhow!("item {} not found", self.id))?;
+            .ok_or(octopux::Error::NotFound)?;
         item.content = self.content.clone();
         Ok(self)
     }
@@ -249,6 +259,23 @@ async fn body_string(resp: ServiceResponse<impl MessageBody>) -> String {
     String::from_utf8(test::read_body(resp).await.to_vec()).unwrap()
 }
 
+async fn body_json(resp: ServiceResponse<impl MessageBody>) -> Value {
+    serde_json::from_str(&body_string(resp).await).unwrap()
+}
+
+fn error(code: &str, message: &str) -> Value {
+    json!({ "code": code, "message": message })
+}
+
+fn not_found() -> Value {
+    error("ENTITY_NOT_FOUND", "no entity has this id")
+}
+
+/// The body of the internal errors, whose message is logged instead of sent
+fn internal_error() -> Value {
+    error("INTERNAL_ERROR", "an internal error occurred")
+}
+
 // ---------------------------------------------------------------------------
 // octopux_info
 // ---------------------------------------------------------------------------
@@ -302,7 +329,7 @@ async fn list_rejects_invalid_query_string() {
 }
 
 #[actix_web::test]
-async fn list_error_returns_500_with_error_message() {
+async fn list_error_returns_500_without_its_message() {
     let state = AppState::with_items(&[]);
     state.fail_list.store(true, Ordering::SeqCst);
     let app = init!(state);
@@ -313,7 +340,7 @@ async fn list_error_returns_500_with_error_message() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body_string(resp).await, "list failed");
+    assert_eq!(body_json(resp).await, internal_error());
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +395,25 @@ async fn find_unknown_id_returns_404() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    assert_eq!(body_string(resp).await, "ENTITY_NOT_FOUND");
+    assert_eq!(body_json(resp).await, not_found());
+}
+
+#[actix_web::test]
+async fn find_error_returns_500_and_not_404() {
+    let state = AppState::with_items(&[(7, "seven")]);
+    state.fail_find.store(true, Ordering::SeqCst);
+    let app = init!(state);
+
+    for req in [
+        test::TestRequest::get().uri("/v1/item/7"),
+        test::TestRequest::delete().uri("/v1/item/7"),
+        test::TestRequest::put().uri("/v1/item/7").set_json(json!({ "id": 7, "content": "x" })),
+    ] {
+        let resp = test::call_service(&app, req.to_request()).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body_json(resp).await, internal_error());
+    }
+    assert_eq!(state.items.lock().unwrap()[&7].content, "seven");
 }
 
 #[actix_web::test]
@@ -438,7 +483,7 @@ async fn create_with_invalid_payload_returns_400() {
 }
 
 #[actix_web::test]
-async fn create_error_returns_500_with_error_message() {
+async fn create_error_returns_500_without_its_message() {
     let state = AppState::with_items(&[]);
     state.fail_save.store(true, Ordering::SeqCst);
     let app = init!(state);
@@ -450,7 +495,28 @@ async fn create_error_returns_500_with_error_message() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body_string(resp).await, "save failed");
+    assert_eq!(body_json(resp).await, internal_error());
+}
+
+#[actix_web::test]
+async fn create_answers_the_client_errors_of_the_model() {
+    for (error, status) in [
+        (octopux::Error::Conflict("the content is taken".into()), StatusCode::CONFLICT),
+        (octopux::Error::BadRequest("the content is empty".into()), StatusCode::BAD_REQUEST),
+    ] {
+        let state = AppState::with_items(&[]);
+        *state.reject_save.lock().unwrap() = Some(error.clone());
+        let app = init!(state);
+
+        let req = test::TestRequest::post()
+            .uri("/v1/item")
+            .set_json(json!({ "content": "new" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), status);
+        assert_eq!(body_json(resp).await, self::error(error.code(), &error.to_string()));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -492,7 +558,7 @@ async fn update_unknown_id_returns_404_without_calling_update() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    assert_eq!(body_string(resp).await, "ENTITY_NOT_FOUND");
+    assert_eq!(body_json(resp).await, not_found());
     assert_eq!(state.update_calls.load(Ordering::SeqCst), 0);
 }
 
@@ -508,7 +574,7 @@ async fn update_with_payload_id_different_from_path_id_returns_400() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(body_string(resp).await, "ID_MISMATCH");
+    assert_eq!(body_json(resp).await, error("ID_MISMATCH", "the payload id differs from the path id"));
     assert_eq!(state.update_calls.load(Ordering::SeqCst), 0);
     let items = state.items.lock().unwrap();
     assert_eq!(items[&3].content, "three");
@@ -549,7 +615,7 @@ async fn update_with_invalid_payload_returns_400() {
 }
 
 #[actix_web::test]
-async fn update_error_returns_500_with_error_message() {
+async fn update_error_returns_500_without_its_message() {
     let state = AppState::with_items(&[(3, "old")]);
     state.fail_update.store(true, Ordering::SeqCst);
     let app = init!(state);
@@ -561,7 +627,7 @@ async fn update_error_returns_500_with_error_message() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body_string(resp).await, "update failed");
+    assert_eq!(body_json(resp).await, internal_error());
     assert_eq!(state.items.lock().unwrap()[&3].content, "old");
 }
 
@@ -599,7 +665,7 @@ async fn delete_unknown_id_returns_404() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    assert_eq!(body_string(resp).await, "ENTITY_NOT_FOUND");
+    assert_eq!(body_json(resp).await, not_found());
     assert_eq!(state.items.lock().unwrap().len(), 1);
 }
 
@@ -620,7 +686,7 @@ async fn delete_uses_default_find_query() {
 }
 
 #[actix_web::test]
-async fn delete_error_returns_500_with_error_message() {
+async fn delete_error_returns_500_without_its_message() {
     let state = AppState::with_items(&[(5, "five")]);
     state.fail_delete.store(true, Ordering::SeqCst);
     let app = init!(state);
@@ -629,7 +695,7 @@ async fn delete_error_returns_500_with_error_message() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body_string(resp).await, "delete failed");
+    assert_eq!(body_json(resp).await, internal_error());
     assert_eq!(state.items.lock().unwrap().len(), 1);
 }
 
@@ -686,11 +752,11 @@ async fn relation_of_an_unknown_parent_returns_404() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    assert_eq!(body_string(resp).await, "ENTITY_NOT_FOUND");
+    assert_eq!(body_json(resp).await, not_found());
 }
 
 #[actix_web::test]
-async fn relation_error_returns_500_with_error_message() {
+async fn relation_error_returns_500_without_its_message() {
     let state = AppState::with_items(&[(1, "a")]);
     state.fail_notes.store(true, Ordering::SeqCst);
     let app = init!(state);
@@ -699,7 +765,7 @@ async fn relation_error_returns_500_with_error_message() {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body_string(resp).await, "notes failed");
+    assert_eq!(body_json(resp).await, internal_error());
 }
 
 #[actix_web::test]

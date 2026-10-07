@@ -25,4 +25,4 @@ pub struct ListQuery {
 }
 ```
 
-Add `filter` to the `#[sqlx_model]` of the model to apply it in `list`. Values are always bound, never written in the SQL.
+Add `filter` to the `#[sqlx_model]` of the model to apply it in `list`. Values are always bound, never written in the SQL. A sort column not allowed, a repeated column or a direction other than `asc`/`desc` answers 400 `BAD_REQUEST`, see [Errors]({{ '/guides/errors/' | relative_url }}).

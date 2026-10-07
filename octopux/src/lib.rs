@@ -133,8 +133,11 @@
 use actix_web::{web, HttpResponse};
 use anyhow::Result;
 
+mod error;
 #[cfg(feature = "openapi")]
 pub mod openapi;
+
+pub use error::Error;
 
 // The derive macros share their names with the traits they implement, like serde's
 // `Serialize`: `use octopux::HttpCreate;` imports both.
@@ -164,6 +167,11 @@ pub mod __private {
     #[cfg(feature = "sqlx")]
     pub use sqlx;
 
+    /// The response of an error returned by a model trait, see [`crate::Error`]
+    pub fn error_response(err: anyhow::Error) -> actix_web::HttpResponse {
+        crate::error::error_response(err)
+    }
+
     pub struct Hook<T, S>(PhantomData<(T, S)>);
 
     pub struct Run;
@@ -186,7 +194,7 @@ pub mod __private {
             None => "ASC",
             Some(d) if d.eq_ignore_ascii_case("asc") => "ASC",
             Some(d) if d.eq_ignore_ascii_case("desc") => "DESC",
-            Some(d) => anyhow::bail!("invalid sort direction `{}`, use asc or desc", d),
+            Some(d) => return Err(crate::Error::BadRequest(format!("invalid sort direction `{}`, use asc or desc", d)).into()),
         };
         let Some(sort) = sort else { return Ok(false) };
         let mut terms: Vec<(&str, &str)> = Vec::new();
@@ -196,10 +204,10 @@ pub mod __private {
                 None => (term, default),
             };
             if !columns.contains(&column) {
-                anyhow::bail!("invalid sort column `{}`, use {}", column, columns.join(", "));
+                return Err(crate::Error::BadRequest(format!("invalid sort column `{}`, use {}", column, columns.join(", "))).into());
             }
             if terms.iter().any(|(c, _)| *c == column) {
-                anyhow::bail!("the sort column `{}` is repeated", column);
+                return Err(crate::Error::BadRequest(format!("the sort column `{}` is repeated", column)).into());
             }
             terms.push((column, direction));
         }
@@ -237,8 +245,8 @@ pub mod __private {
     {
         match R::list_related(info.into_inner().id, &query, &state).await {
             Ok(Some(res)) => HttpResponse::Ok().json(res),
-            Ok(None) => HttpResponse::NotFound().body("ENTITY_NOT_FOUND"),
-            Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+            Ok(None) => actix_web::ResponseError::error_response(&crate::Error::NotFound),
+            Err(err) => error_response(err),
         }
     }
     impl<T, S> Hook<T, S> { pub fn new() -> Self { Hook(PhantomData) } }
@@ -347,7 +355,8 @@ pub trait UpdatableModel<T, Q, AppState> {
 
 /// A transformation of the payload before it is written, called by the `save` of `SqlxNewModel`
 /// and the `update` of `SqlxUpdatableModel` when the struct has the `before_save` option
-/// of `#[sqlx_model(...)]`. An error aborts the query and answers 500.
+/// of `#[sqlx_model(...)]`. An error aborts the query, a [`Error`] answering its status
+/// (`Error::BadRequest` for an invalid payload), any other error 500.
 ///
 /// ```ignore
 ///
@@ -414,7 +423,7 @@ pub trait SqlxFilter<DB: sqlx::Database> {
 
     /// Pushes the ` ORDER BY ` clause of the sort field when it is set, and tells whether it did,
     /// so that the caller can order by default otherwise. A column not allowed by the sort field
-    /// is an error, the query being left untouched
+    /// is an [`Error::BadRequest`], the query being left untouched
     fn push_order_by(&self, _qb: &mut sqlx::QueryBuilder<DB>) -> Result<bool> {
         Ok(false)
     }

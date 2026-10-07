@@ -7,4 +7,4 @@ permalink: /guides/
 
 # Guides
 
-Configure the sqlx derives, transform payloads, filter and sort lists, declare relations and serve GraphQL.
+Configure the sqlx derives, transform payloads, filter and sort lists, declare relations, serve GraphQL and answer errors.

@@ -44,7 +44,7 @@ fn impl_http_create_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
                 let result = to_save.save(&params, &state).await;
                 match result {
                     Ok(res) => ::octopux::__private::actix_web::HttpResponse::Ok().json(res),
-                    Err(err) => ::octopux::__private::actix_web::HttpResponse::InternalServerError().body(err.to_string())
+                    Err(err) => ::octopux::__private::error_response(err)
                 }
             }
         }
@@ -142,7 +142,7 @@ fn impl_http_find_list_delete_macro(ast: &syn::DeriveInput) -> proc_macro::Token
                 let result = #name::list(&params, &state).await;
                 match result {
                     Ok(res) => ::octopux::__private::actix_web::HttpResponse::Ok().json(res),
-                    Err(err) => ::octopux::__private::actix_web::HttpResponse::InternalServerError().body(err.to_string())
+                    Err(err) => ::octopux::__private::error_response(err)
                 }
             }
             async fn http_find(
@@ -155,7 +155,7 @@ fn impl_http_find_list_delete_macro(ast: &syn::DeriveInput) -> proc_macro::Token
                 let result = #name::find(info.id.into(), &params, &state).await;
                 match result {
                     Ok(res) => ::octopux::__private::actix_web::HttpResponse::Ok().json(res),
-                    Err(err) => ::octopux::__private::actix_web::HttpResponse::NotFound().body("ENTITY_NOT_FOUND")
+                    Err(err) => ::octopux::__private::error_response(err)
                 }
             }
             async fn http_delete(
@@ -172,10 +172,10 @@ fn impl_http_find_list_delete_macro(ast: &syn::DeriveInput) -> proc_macro::Token
                     Ok(entity) => {
                         match entity.delete(&params, &state).await {
                             Ok(e) => ::octopux::__private::actix_web::HttpResponse::Ok().json(e),
-                            Err(err) => ::octopux::__private::actix_web::HttpResponse::InternalServerError().body(err.to_string())
+                            Err(err) => ::octopux::__private::error_response(err)
                         }
                     }
-                    Err(err) => ::octopux::__private::actix_web::HttpResponse::NotFound().body("ENTITY_NOT_FOUND")
+                    Err(err) => ::octopux::__private::error_response(err)
                 }
             }
         }
@@ -219,7 +219,7 @@ fn impl_http_update_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
     let id_check = if has_named_field(ast, "id") {
         quote! {
             if to_update.id != info.id {
-                return ::octopux::__private::actix_web::HttpResponse::BadRequest().body("ID_MISMATCH");
+                return ::octopux::__private::actix_web::ResponseError::error_response(&::octopux::Error::IdMismatch);
             }
         }
     } else {
@@ -248,13 +248,13 @@ fn impl_http_update_macro(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
                 let result = #output::find(info.id.into(), &find_params, &state).await;
 
                 match result {
-                    Ok(entity) => {
+                    Ok(_) => {
                         match to_update.update(&params, &state).await {
                             Ok(e) => ::octopux::__private::actix_web::HttpResponse::Ok().json(e),
-                            Err(err) => ::octopux::__private::actix_web::HttpResponse::InternalServerError().body(err.to_string())
+                            Err(err) => ::octopux::__private::error_response(err)
                         }
                     }
-                    Err(err) => ::octopux::__private::actix_web::HttpResponse::NotFound().body("ENTITY_NOT_FOUND")
+                    Err(err) => ::octopux::__private::error_response(err)
                 }
             }
         }

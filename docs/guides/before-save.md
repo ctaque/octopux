@@ -6,7 +6,7 @@ nav_order: 2
 
 # Transforming the payload
 
-With `before_save`, implement `BeforeSave`, e.g. to hash a password. An error answers 500:
+With `before_save`, implement `BeforeSave`, e.g. to hash a password. An error aborts the query, see [Errors]({{ '/guides/errors/' | relative_url }}) for its status:
 
 ```rust
 #[derive(Serialize, Deserialize, HttpCreate, SqlxNewModel)]

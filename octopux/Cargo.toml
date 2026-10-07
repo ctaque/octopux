@@ -21,6 +21,8 @@ async-trait.workspace = true
 # Deserializes the path parameters of the generated handlers
 serde.workspace = true
 serde_json.workspace = true
+# The internal errors of the generated handlers, logged instead of sent to the client
+log = "0.4"
 apistos = { workspace = true, optional = true }
 # Queries of the `SqlxModel`, `SqlxNewModel` and `SqlxUpdatableModel` derives, the database drivers
 # and the runtime are the ones the application enables on its own sqlx dependency

@@ -2498,6 +2498,7 @@ dependencies = [
  "apistos-schemars",
  "async-trait",
  "chrono",
+ "log",
  "octopux-derive 0.23.0",
  "serde",
  "serde_json",

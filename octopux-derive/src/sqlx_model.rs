@@ -232,7 +232,7 @@ pub fn impl_sqlx_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
                     .execute(&state.#pool)
                     .await?;
                 if result.rows_affected() == 0 {
-                    return Err(::octopux::anyhow::anyhow!("ENTITY_NOT_FOUND"));
+                    return Err(::octopux::Error::NotFound.into());
                 }
                 let model = ::octopux::__private::sqlx::query_as::<_, #name>(#select_by_id)
                     .bind(&self.id)

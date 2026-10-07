@@ -125,7 +125,9 @@ mod label {
 
     fn normalize(name: &str) -> anyhow::Result<String> {
         let name = name.trim();
-        anyhow::ensure!(!name.is_empty(), "EMPTY_NAME");
+        if name.is_empty() {
+            return Err(octopux::Error::BadRequest("the name is empty".into()).into());
+        }
         Ok(name.to_uppercase())
     }
 
@@ -162,7 +164,7 @@ async fn state() -> web::Data<AppState> {
             updated_at DATETIME,
             deleted_at DATETIME
         );
-        CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL);
+        CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL UNIQUE);
         CREATE TABLE label (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);",
     )
     .execute(&db)
@@ -273,10 +275,12 @@ async fn before_save_transforms_the_payload() {
     let updated: Value = test::call_and_read_body_json(&app, req).await;
     assert_eq!(updated, json!({ "id": 1, "name": "LATER" }));
 
-    // an error of the hook aborts the query
+    // an error of the hook aborts the query, and answers its status
     let req = test::TestRequest::post().uri("/label").set_json(json!({ "name": " " })).to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body, json!({ "code": "BAD_REQUEST", "message": "the name is empty" }));
     let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM label").fetch_one(&state.db).await.unwrap();
     assert_eq!(rows, 1);
 }
@@ -425,6 +429,43 @@ async fn filter_option_lists_the_filtered_and_sorted_rows() {
     assert_eq!(list(filtered).await.unwrap(), ["c", "a"]);
     let error = list(ProjectFilter { sort: Some("id".into()), ..Default::default() }).await.unwrap_err();
     assert_eq!(error.to_string(), "invalid sort column `id`, use name, type");
+    assert!(matches!(error.downcast_ref(), Some(octopux::Error::BadRequest(_))));
+}
+
+#[actix_web::test]
+async fn answers_the_constraint_violations_as_client_errors() {
+    let state = state().await;
+    let app = app!(state);
+
+    let req = test::TestRequest::post().uri("/tag").set_json(json!({ "label": "x" })).to_request();
+    assert!(test::call_service(&app, req).await.status().is_success());
+    let req = test::TestRequest::post().uri("/tag").set_json(json!({ "label": "x" })).to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body, json!({ "code": "CONFLICT", "message": "a unique value is already taken" }));
+
+    // the message of the database, naming its table, is not sent
+    let error = sqlx::query("INSERT INTO tags (label) VALUES (NULL)").execute(&state.db).await.unwrap_err();
+    let resp = octopux::__private::error_response(error.into());
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({ "code": "BAD_REQUEST", "message": "the payload violates a constraint of the table" })
+    );
+}
+
+#[actix_web::test]
+async fn answers_the_other_database_errors_as_internal_errors() {
+    let state = state().await;
+    let app = app!(state);
+    sqlx::query("DROP TABLE tags").execute(&state.db).await.unwrap();
+
+    let resp = test::call_service(&app, test::TestRequest::get().uri("/tag/1").to_request()).await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body, json!({ "code": "INTERNAL_ERROR", "message": "an internal error occurred" }));
 }
 
 // The PostgreSQL and MySQL queries are only type checked: they differ from the SQLite ones
