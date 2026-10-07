@@ -24,15 +24,21 @@ serde_json.workspace = true
 # The internal errors of the generated handlers, logged instead of sent to the client
 log = "0.4"
 apistos = { workspace = true, optional = true }
+# The schema of the PostGIS geometries in the OpenAPI document, the fork of schemars apistos uses
+schemars = { workspace = true, optional = true }
 # Queries of the `SqlxModel`, `SqlxNewModel` and `SqlxUpdatableModel` derives, the database drivers
 # and the runtime are the ones the application enables on its own sqlx dependency
 sqlx = { version = "0.9", default-features = false, features = ["chrono"], optional = true }
 # `created_at`, `updated_at` and `deleted_at` of the sqlx derives
 chrono = { workspace = true, optional = true }
+# Conversions of the PostGIS geometries to and from the types of the `geo` ecosystem
+geo-types = { version = "0.7", optional = true }
 
 [features]
-openapi = ["dep:apistos"]
+openapi = ["dep:apistos", "dep:schemars"]
 sqlx = ["dep:sqlx", "dep:chrono"]
+# The PostGIS `geometry` and `geography` columns, read and written by the sqlx derives on PostgreSQL
+postgis = ["sqlx", "sqlx/postgres", "dep:geo-types"]
 
 [dev-dependencies]
 apistos.workspace = true

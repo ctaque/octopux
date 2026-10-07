@@ -136,6 +136,8 @@ use anyhow::Result;
 mod error;
 #[cfg(feature = "openapi")]
 pub mod openapi;
+#[cfg(feature = "postgis")]
+pub mod postgis;
 
 pub use error::Error;
 
