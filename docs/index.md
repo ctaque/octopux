@@ -25,7 +25,6 @@ Lightweight GraphQL/JSON CRUD operations for [Actix Web](https://actix.rs) (v4).
 - **GraphQL** with [async-graphql](https://docs.rs/async-graphql) and GraphiQL
 - **Has-many and many-to-many relations**
 - **PostGIS** geometries as GeoJSON, with spatial filters
-- **pgvector** embeddings, with similarity search
 - **A CLI** generating models, relations and SQL migrations, even from an existing database
 
 ## In 30 seconds
