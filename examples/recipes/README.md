@@ -20,8 +20,9 @@ model from the cache and embed nothing.
 
 | Route | Action |
 | --- | --- |
+| `GET /` | The search page: type what you feel like eating, the results follow as you type |
 | `GET /v1/recipe/search?q=...` | Search the recipes by meaning, with the filters of the list |
-| `GET /v1/recipe` | List a page of recipes, filtered by `cuisine`, `course`, `vegetarian`, `minutes_lte`, ordered by `near` |
+| `GET /v1/recipe` | List a page of recipes, filtered by `cuisine`, `course`, `vegetarian`, `minutes_lte` |
 | `GET /v1/recipe/{id}` | Find a recipe |
 | `POST /v1/recipe` | Create a recipe, embedded before the insert |
 | `PUT /v1/recipe/{id}` | Update a recipe, embedded again before the update |
@@ -61,6 +62,14 @@ The model runs on the CPU: `TextEmbedding::embed` takes `&mut self`, so the work
 a mutex, and it runs on the blocking threads of the runtime. A search embeds one short text, a few
 milliseconds.
 
+## The search page
+
+Open <http://127.0.0.1:8085/>. The page (`static/index.html`, compiled into the binary) sends the
+text and the filters to `GET /v1/recipe/search`. The backend embeds the text, then lists the
+recipes nearest to it. The browser never sees a vector: it sends text and receives recipes. A
+click on a recipe calls `GET /v1/recipe/{id}/similar`, which reuses the stored embedding of the
+recipe and embeds nothing.
+
 ## Searching
 
 `q` is what you feel like eating, in English. The other parameters filter the recipes:
@@ -92,8 +101,8 @@ curl -G localhost:8085/v1/recipe/search --data-urlencode 'q=spicy noodle soup' -
 
 An empty `q` is answered 400 `{"code": "BAD_REQUEST", "message": "`q` must tell what to search"}`.
 
-`GET /v1/recipe` takes the same filters, a `sort` (`name`, `cuisine`, `minutes`, `created_at`, `-`
-for descending) and `near`, a vector of 384 numbers computed elsewhere:
+`GET /v1/recipe` takes the same filters and a `sort` (`name`, `cuisine`, `minutes`, `created_at`, `-`
+for descending). It takes no vector: `near` is set by the search only, from the embedding of `q`.
 
 ```bash
 curl 'localhost:8085/v1/recipe?cuisine=greek&course=dessert&sort=minutes'
@@ -101,6 +110,20 @@ curl 'localhost:8085/v1/recipe?cuisine=greek&course=dessert&sort=minutes'
 ```
 
 ## Similar recipes
+
+`GET /v1/recipe/{id}/similar` lists the other recipes, the most similar first. It is a `HasMany`
+relation (`src/recipe_similar.rs`), documented in Swagger UI under the `recipe` tag. It reads the
+stored embedding of the recipe and embeds nothing: no model call, a single indexed query.
+
+| Parameter | Filter | Example |
+| --- | --- | --- |
+| `min_similarity` | The least cosine similarity, from -1 to 1, none by default | `min_similarity=0.8` |
+| `other_cuisine` | Only the recipes of another cuisine with `true` | `other_cuisine=true` |
+| `limit` | 5 recipes by default, 100 at most | `limit=4` |
+
+Each recipe is returned with its `id`, `name`, `cuisine`, `course` and `similarity`, `1 - (embedding <=> ...)`.
+An unknown or deleted recipe is answered 404 `{"code": "ENTITY_NOT_FOUND", ...}`. A recipe without an
+embedding yet is answered 404 as well.
 
 ```bash
 # the recipes closest to the tonkotsu ramen (id 41)
@@ -110,9 +133,11 @@ curl 'localhost:8085/v1/recipe/41/similar?limit=4'
 
 # the same dish elsewhere in the world: only the recipes of another cuisine
 curl 'localhost:8085/v1/recipe/1/similar?other_cuisine=true&limit=4'
+# Spaghetti carbonara: Chow mein 0.677, Kefta tagine 0.670, Mac and cheese 0.669, Calamares a la romana 0.669
 
 # only the recipes at least 80 % similar
 curl 'localhost:8085/v1/recipe/41/similar?min_similarity=0.8'
+# Wonton soup 0.82
 ```
 
 With this model, unrelated recipes are still around 0.5 similar: compare the similarities with each
@@ -147,12 +172,18 @@ recipe, embedded by `before_save` as for `POST` and `PUT`.
 | Field | REST route |
 | --- | --- |
 | `searchRecipes(q, offset, limit, cuisine, course, vegetarian, minutesLte)` | `GET /v1/recipe/search` |
-| `recipes(offset, limit, cuisine, course, vegetarian, minutesLte, near, sort)` | `GET /v1/recipe`, `near` being the `Vector` scalar |
+| `recipes(offset, limit, cuisine, course, vegetarian, minutesLte, sort)` | `GET /v1/recipe` |
 | `recipe(id)` | `GET /v1/recipe/{id}` |
 | `Recipe.similar(minSimilarity, otherCuisine, limit)` | `GET /v1/recipe/{id}/similar` |
 | `createRecipe(input: NewRecipe!)` | `POST /v1/recipe` |
 | `updateRecipe(input: UpdatableRecipe!)` | `PUT /v1/recipe/{id}` |
 | `deleteRecipe(id)` | `DELETE /v1/recipe/{id}` |
+
+`similar` is not a root query: in the documentation explorer of GraphiQL, it is a field of the
+`Recipe` type, after `deletedAt`, so it is asked for on any recipe, whether it comes from `recipe`,
+`recipes` or `searchRecipes`. Its arguments are those of the REST route, in camelCase, and a recipe
+without an embedding yet has no similar recipe, `[]`. Each recipe of a list runs its own query (no
+DataLoader), so keep the `limit` of the list small when asking for `similar`.
 
 ```graphql
 # by meaning, the filters applying first
@@ -167,6 +198,16 @@ recipe, embedded by `before_save` as for `POST` and `PUT`.
   }
 }
 # Tonkotsu ramen: Wonton soup 0.82, Samgyetang 0.786, Udon noodle soup 0.785
+
+# the similar recipes of each result of a search, here from another cuisine
+{
+  searchRecipes(q: "dessert with chocolate", limit: 2) {
+    name
+    similar(limit: 2, otherCuisine: true) { name cuisine similarity }
+  }
+}
+# Brownies: Bread and butter pudding 0.767, Baklava 0.765
+# Bread and butter pudding: Egg tarts 0.822, Baklava 0.807
 
 # the input has no embedding, `before_save` computes it
 mutation {

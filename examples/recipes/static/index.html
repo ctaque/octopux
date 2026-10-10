@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recipe search</title>
+<style>
+  :root { --bg: #fafaf7; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e2dc; --card: #fff; --accent: #b4532a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --fg: #ececea; --muted: #9a9a94; --line: #2e2e2b; --card: #1f1f1d; --accent: #e08a5e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.hint { color: var(--muted); margin: 0 0 20px; }
+  input, select { font: inherit; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  #q { width: 100%; font-size: 17px; padding: 12px 14px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 20px; align-items: center; }
+  .filters label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  #minutes { width: 80px; }
+  #status { color: var(--muted); min-height: 1.5em; }
+  ol { list-style: none; padding: 0; margin: 0; }
+  li.recipe { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; cursor: pointer; }
+  li.recipe:hover { border-color: var(--accent); }
+  .name { font-weight: 600; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .desc { margin-top: 4px; }
+  .similar { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 14px; }
+  .similar span { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Recipe search</h1>
+  <p class="hint">Describe what you feel like eating, in English. The server embeds your text and returns the closest recipes. Click a recipe to see the most similar ones.</p>
+
+  <input id="q" type="search" placeholder="something warm and comforting for a cold winter evening" autofocus>
+  <div class="filters">
+    <select id="cuisine"><option value="">Any cuisine</option></select>
+    <select id="course">
+      <option value="">Any course</option>
+      <option>starter</option><option>soup</option><option>main</option><option>side</option>
+      <option>dessert</option><option>breakfast</option><option>drink</option>
+    </select>
+    <label><input id="vegetarian" type="checkbox"> vegetarian</label>
+    <label>at most <input id="minutes" type="number" min="1" placeholder="min"> minutes</label>
+  </div>
+
+  <div id="status"></div>
+  <ol id="results"></ol>
+</main>
+
+<script>
+const CUISINES = ["american", "british", "chinese", "ethiopian", "french", "greek", "indian", "italian", "japanese",
+  "korean", "lebanese", "mexican", "moroccan", "nordic", "spanish", "thai", "vietnamese"];
+const $ = (id) => document.getElementById(id);
+for (const cuisine of CUISINES) $("cuisine").add(new Option(cuisine, cuisine));
+
+// The answer of the latest search only: a slower earlier one must not overwrite it
+let latest = 0;
+let timer;
+
+// 1. The frontend sends the text and the filters, never a vector
+async function search() {
+  const q = $("q").value.trim();
+  if (!q) { $("results").replaceChildren(); $("status").textContent = ""; return; }
+  const params = new URLSearchParams({ q, limit: "10" });
+  if ($("cuisine").value) params.set("cuisine", $("cuisine").value);
+  if ($("course").value) params.set("course", $("course").value);
+  if ($("vegetarian").checked) params.set("vegetarian", "true");
+  if ($("minutes").value) params.set("minutes_lte", $("minutes").value);
+
+  const id = ++latest;
+  $("status").textContent = "Searching…";
+  const started = performance.now();
+  // 2. The backend embeds `q`, then lists the recipes ordered by `embedding <=> $1`
+  const response = await fetch(`/v1/recipe/search?${params}`);
+  const body = await response.json();
+  if (id !== latest) return;
+  if (!response.ok) { $("status").textContent = body.message; $("results").replaceChildren(); return; }
+  // 3. The nearest recipes first
+  $("status").textContent = `${body.length} recipes, in ${Math.round(performance.now() - started)} ms`;
+  $("results").replaceChildren(...body.map(renderRecipe));
+}
+
+function renderRecipe(recipe) {
+  const li = document.createElement("li");
+  li.className = "recipe";
+  li.innerHTML = `<div class="name"></div><div class="meta"></div><div class="desc"></div>`;
+  li.querySelector(".name").textContent = recipe.name;
+  li.querySelector(".meta").textContent =
+    `${recipe.cuisine} · ${recipe.course} · ${recipe.minutes} min${recipe.vegetarian ? " · vegetarian" : ""}`;
+  li.querySelector(".desc").textContent = recipe.description;
+  li.addEventListener("click", () => toggleSimilar(li, recipe.id));
+  return li;
+}
+
+// The similar recipes reuse the stored embedding of the recipe: nothing is embedded
+async function toggleSimilar(li, id) {
+  const open = li.querySelector(".similar");
+  if (open) { open.remove(); return; }
+  const div = document.createElement("div");
+  div.className = "similar";
+  div.textContent = "Loading similar recipes…";
+  li.append(div);
+  const response = await fetch(`/v1/recipe/${id}/similar?limit=4`);
+  const similar = await response.json();
+  div.textContent = "Similar: ";
+  similar.forEach((recipe, i) => {
+    div.append(`${i ? ", " : ""}${recipe.name} `);
+    const score = document.createElement("span");
+    score.textContent = `(${recipe.cuisine}, ${recipe.similarity.toFixed(2)})`;
+    div.append(score);
+  });
+}
+
+// A search 300 ms after the last keystroke, at once when a filter changes
+$("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 300); });
+for (const id of ["cuisine", "course", "vegetarian", "minutes"]) $(id).addEventListener("change", search);
+</script>
+</body>
+</html>

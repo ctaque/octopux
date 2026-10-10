@@ -1,5 +1,4 @@
 use async_graphql::{ComplexObject, Context, EmptySubscription, Object, Schema};
-use octopux::pgvector::Vector;
 use octopux::{HasMany, Model, NewModel, UpdatableModel};
 
 use crate::recipe::{DeleteQuery, FindQuery, Id, ListQuery, NewRecipe, Recipe, SaveQuery, UpdatableRecipe, UpdateQuery};
@@ -7,7 +6,7 @@ use crate::recipe_search::{search_recipes, SearchQuery};
 use crate::recipe_similar::{RecipeSimilar, RecipeSimilarQuery, SimilarRecipe};
 use crate::shared::AppState;
 
-// The GraphQL schema of the recipes, the vectors being scalars (octopux `graphql` feature)
+// The GraphQL schema of the recipes, which never takes nor returns a vector
 pub type RecipeSchema = Schema<RecipeQuery, RecipeMutation, EmptySubscription>;
 
 // GraphQL queries of the recipes, the same as the REST routes
@@ -20,8 +19,7 @@ impl RecipeQuery {
         find(id, app_state(ctx)?).await
     }
 
-    /// A page of recipes, filtered and ordered as `GET /v1/recipe`: `near`, a vector of 384 numbers,
-    /// orders them by the cosine distance of their embedding
+    /// A page of recipes, filtered and ordered as `GET /v1/recipe`
     #[allow(clippy::too_many_arguments)]
     async fn recipes(
         &self,
@@ -32,10 +30,9 @@ impl RecipeQuery {
         course: Option<String>,
         vegetarian: Option<bool>,
         minutes_lte: Option<i32>,
-        near: Option<Vector>,
         sort: Option<String>,
     ) -> async_graphql::Result<Vec<Recipe>> {
-        let query = ListQuery { offset, limit, cuisine, course, vegetarian, minutes_lte, near, sort };
+        let query = ListQuery { offset, limit, cuisine, course, vegetarian, minutes_lte, near: None, sort };
         Ok(Recipe::list(&query, app_state(ctx)?).await?)
     }
 

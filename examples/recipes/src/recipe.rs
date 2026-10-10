@@ -26,7 +26,8 @@ use schemars::JsonSchema;
 #[derive(Default, Deserialize, JsonSchema, ApiComponent)]
 pub struct FindQuery {}
 // The filters of the list, and its similarity search: `SqlxFilter` orders the recipes by the
-// distance of their embedding to the vector of the query, nearest first, after the conditions
+// distance of their embedding to `near`, nearest first, after the conditions. `near` is set by the
+// search only, from the embedding of its text: the clients never send a vector
 #[derive(Default, Deserialize, JsonSchema, ApiComponent, SqlxFilter)]
 #[sqlx_filter(database = "postgres")]
 pub struct ListQuery {
@@ -42,11 +43,12 @@ pub struct ListQuery {
     pub vegetarian: Option<bool>,
     /// The recipes ready in at most this number of minutes: `minutes <= ...`
     pub minutes_lte: Option<i32>,
-    /// The recipes nearest to this vector of 384 numbers, by cosine distance:
-    /// `ORDER BY embedding <=> ...`. `GET /recipe/search?q=...` computes it from a text
+    // The recipes nearest to this vector of 384 numbers, by cosine distance:
+    // `ORDER BY embedding <=> ...`. Never read from the query string nor documented:
+    // `GET /recipe/search?q=...` computes it from a text
     #[sqlx_filter(column = "embedding", op = "nearest")]
-    // a string in the query string, not an array exploded into `near=...&near=...`
-    #[schemars(with = "Option<String>")]
+    #[serde(skip)]
+    #[schemars(skip)]
     pub near: Option<Vector>,
     /// The columns ordering the recipes, after the distance: `minutes`, `-created_at`...
     #[sqlx_filter(sort = "name, cuisine, minutes, created_at")]

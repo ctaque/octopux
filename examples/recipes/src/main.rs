@@ -19,6 +19,13 @@ async fn graphiql() -> actix_web::HttpResponse {
         .body(GraphiQLSource::build().endpoint("/graphql").finish())
 }
 
+// The search page, compiled into the binary: the frontend sends a text, the backend embeds it
+async fn index() -> actix_web::HttpResponse {
+    actix_web::HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(include_str!("../static/index.html"))
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenvy::dotenv().ok(); // loads .env if present, never overrides existing vars
@@ -45,7 +52,7 @@ async fn main() -> std::io::Result<()> {
     // The resolvers read the state from the data of the schema
     let schema = graphql::schema(state.clone());
 
-    println!("listening on http://127.0.0.1:8085, Swagger UI on /swagger, GraphiQL on /graphql");
+    println!("listening on http://127.0.0.1:8085, search page on /, Swagger UI on /swagger, GraphiQL on /graphql");
     actix_web::HttpServer::new(move || {
         actix_web::App::new()
             .document(Spec::default())
@@ -64,6 +71,8 @@ async fn main() -> std::io::Result<()> {
                     .route(web::post().to(GraphQL::new(schema.clone())))
                     .route(web::get().to(graphiql)),
             )
+            // the search page, on the same origin as the API
+            .route("/", web::get().to(index))
     })
         .bind(("127.0.0.1", 8085))?
         .run()
@@ -81,8 +90,7 @@ mod tests {
     fn the_schema_exposes_the_recipes_without_their_embedding() {
         let sdl = Schema::build(RecipeQuery, RecipeMutation, EmptySubscription).finish().sdl();
         for expected in [
-            "scalar Vector",
-            "recipes(offset: Int, limit: Int, cuisine: String, course: String, vegetarian: Boolean, minutesLte: Int, near: Vector, sort: String): [Recipe!]!",
+            "recipes(offset: Int, limit: Int, cuisine: String, course: String, vegetarian: Boolean, minutesLte: Int, sort: String): [Recipe!]!",
             "searchRecipes(q: String!, offset: Int, limit: Int, cuisine: String, course: String, vegetarian: Boolean, minutesLte: Int): [Recipe!]!",
             "similar(minSimilarity: Float, otherCuisine: Boolean, limit: Int): [SimilarRecipe!]!",
             "createRecipe(input: NewRecipe!): Recipe!",
@@ -92,6 +100,7 @@ mod tests {
             assert!(sdl.contains(expected), "`{}` missing from\n{}", expected, sdl);
         }
         assert!(!sdl.contains("embedding:"), "the embedding is exposed in\n{}", sdl);
+        assert!(!sdl.contains("Vector"), "a vector is exposed in\n{}", sdl);
     }
 
     #[test]
