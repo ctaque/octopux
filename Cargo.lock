@@ -3694,7 +3694,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "fastembed",
- "octopux 0.26.0",
+ "octopux 0.27.0",
  "serde",
  "serde_json",
  "sqlx",
