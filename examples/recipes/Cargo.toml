@@ -1,0 +1,25 @@
+[package]
+name = "recipes-api"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[package.metadata.release]
+release = false
+
+[dependencies]
+# `graphql`: the vectors are GraphQL scalars too, as in the REST routes
+octopux = { workspace = true, features = ["openapi", "sqlx", "pgvector", "graphql"] }
+actix-web = "4.15.0"
+apistos = { version = "0.9.0", features = ["chrono", "swagger-ui"] }
+async-trait = "0.1.92"
+chrono = { version = "0.4.45", features = ["serde"] }
+schemars = { version = "0.8.22", package = "apistos-schemars", features = ["chrono"] }
+serde = { version = "1.0.229", features = ["derive"] }
+sqlx.workspace = true
+dotenvy = "0.15.7"
+serde_json = "1"
+async-graphql = { version = "7", features = ["chrono"] }
+async-graphql-actix-web = "7"
+# Computes the embeddings locally, with an ONNX model downloaded from Hugging Face on the first run
+fastembed = { version = "7.1.1", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
