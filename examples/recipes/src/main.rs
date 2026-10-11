@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
     // creates the vector extension, the recipe table, its HNSW index and 340 recipes
     sqlx::migrate!().run(&pool).await.map_err(std::io::Error::other)?;
 
-    // downloads the model on the first run (about 130 MB), then loads it from `.fastembed_cache`
+    // downloads the model on the first run (about 470 MB), then loads it from `.fastembed_cache`
     let embedder = embedder::Embedder::load().map_err(std::io::Error::other)?;
     // the seeded recipes have no embedding yet: computed once, in a few seconds
     let embedded = embedder::embed_missing(&pool, &embedder).await.map_err(std::io::Error::other)?;
@@ -107,8 +107,8 @@ mod tests {
     fn the_embedded_text_names_the_cuisine_and_the_course() {
         assert_eq!(
             recipe_text("Miso soup", "japanese", "soup", true, "Light dashi broth."),
-            "Miso soup, a vegetarian japanese soup. Light dashi broth."
+            "passage: Miso soup, a vegetarian japanese soup. Light dashi broth."
         );
-        assert_eq!(recipe_text("Gyoza", "japanese", "starter", false, "Dumplings."), "Gyoza, a japanese starter. Dumplings.");
+        assert_eq!(recipe_text("Gyoza", "japanese", "starter", false, "Dumplings."), "passage: Gyoza, a japanese starter. Dumplings.");
     }
 }

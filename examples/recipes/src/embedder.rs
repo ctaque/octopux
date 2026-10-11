@@ -5,12 +5,16 @@ use octopux::anyhow::{anyhow, Result};
 use octopux::pgvector::Vector;
 use sqlx::PgPool;
 
-/// The instruction BGE puts before a short query, to find the passages answering it
-const QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
+/// E5 was trained with a prefix on each text: `query: ` before a search, `passage: ` before a
+/// document it should find. Without them, the similarities are lower and the order worse
+const QUERY_PREFIX: &str = "query: ";
+const PASSAGE_PREFIX: &str = "passage: ";
 /// Recipes embedded at once at the start
 const BATCH_SIZE: usize = 64;
 
-/// The embedding model, BGE small English v1.5 (384 dimensions), run locally on the CPU.
+/// The embedding model, multilingual E5 small (384 dimensions), run locally on the CPU. It maps a
+/// text and its translation close to each other, so that a search in French, "une soupe épicée",
+/// finds the recipes written in English, "spicy soup".
 /// `TextEmbedding::embed` takes `&mut self`, so the workers share it behind a mutex, and it runs
 /// on the blocking threads of the runtime, a request computing its embedding in a few milliseconds.
 #[derive(Clone)]
@@ -19,7 +23,7 @@ pub struct Embedder(Arc<Mutex<TextEmbedding>>);
 impl Embedder {
     /// Loads the model, downloaded from Hugging Face on the first run into `.fastembed_cache`
     pub fn load() -> Result<Self> {
-        let model = TextEmbedding::try_new(TextInitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true))?;
+        let model = TextEmbedding::try_new(TextInitOptions::new(EmbeddingModel::MultilingualE5Small).with_show_download_progress(true))?;
         Ok(Embedder(Arc::new(Mutex::new(model))))
     }
 
@@ -36,16 +40,17 @@ impl Embedder {
 
     /// The embedding of a search, closest to the embeddings of the recipes answering it
     pub async fn embed_query(&self, query: &str) -> Result<Vector> {
-        let mut vectors = self.embed(vec![format!("{}{}", QUERY_INSTRUCTION, query)]).await?;
+        let mut vectors = self.embed(vec![format!("{}{}", QUERY_PREFIX, query)]).await?;
         vectors.pop().ok_or_else(|| anyhow!("the model returned no embedding"))
     }
 }
 
-/// The text embedded for a recipe: its name, its cuisine and course, then its description, so that
-/// a search for "a japanese soup" finds the japanese soups
+/// The text embedded for a recipe, as a passage: its name, its cuisine and course, then its
+/// description, so that a search for "a japanese soup", or "une soupe japonaise", finds the
+/// japanese soups
 pub fn recipe_text(name: &str, cuisine: &str, course: &str, vegetarian: bool, description: &str) -> String {
     let diet = if vegetarian { "vegetarian " } else { "" };
-    format!("{}, a {}{} {}. {}", name, diet, cuisine, course, description)
+    format!("{}{}, a {}{} {}. {}", PASSAGE_PREFIX, name, diet, cuisine, course, description)
 }
 
 /// Computes the embeddings the recipes lack, those of the seed migration, by batches.

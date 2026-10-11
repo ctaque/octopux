@@ -1,10 +1,11 @@
 # recipes example
 
 A semantic search over 340 recipes of 17 cuisines: ask for "something warm and comforting for a
-cold winter evening" and get a mulled wine, a bean soup and a boeuf bourguignon, although none of
-them contains these words.
+cold winter evening", or in French for "quelque chose de chaud et réconfortant pour une soirée
+d'hiver", and get a mulled wine, a glogg and a boeuf bourguignon, although none of them contains
+these words, and the recipes are written in English.
 
-The embeddings are real ones, computed locally by the BGE small English v1.5 model (384 dimensions)
+The embeddings are real ones, computed locally by the multilingual E5 small model (384 dimensions)
 with [fastembed](https://crates.io/crates/fastembed), without an API key. The recipes are served
 by the sqlx derives (octopux `pgvector` feature) on REST routes documented with OpenAPI, and on a
 GraphQL schema.
@@ -14,7 +15,7 @@ docker compose up -d   # PostgreSQL with pgvector on localhost:5434
 cargo run              # migrates, seeds 340 recipes, embeds them, listens on 127.0.0.1:8085
 ```
 
-The first run downloads the model, about 130 MB, into `.fastembed_cache`, then computes the
+The first run downloads the model, about 470 MB, into `.fastembed_cache`, then computes the
 embeddings of the seeded recipes in a few seconds (`embedded 340 recipes`). The next runs load the
 model from the cache and embed nothing.
 
@@ -36,9 +37,9 @@ Swagger UI is served on `/swagger`. The GraphQL schema is served on `POST /graph
 
 ```
                  text of the recipe                         vector(384)
-POST /recipe ──▶ before_save ──▶ BGE small (fastembed) ──▶ recipe.embedding
+POST /recipe ──▶ before_save ──▶ E5 small (fastembed) ───▶ recipe.embedding
                                                                  │ HNSW index
-GET /recipe/search?q=... ──▶ BGE small ──▶ ListQuery { near } ───┘ ORDER BY embedding <=> $1
+GET /recipe/search?q=... ──▶ E5 small ───▶ ListQuery { near } ───┘ ORDER BY embedding <=> $1
 ```
 
 1. **The table** (`migrations/`): a `recipe` table with an `embedding vector(384)` column, NULL until
@@ -46,13 +47,14 @@ GET /recipe/search?q=... ──▶ BGE small ──▶ ListQuery { near } ──
    without their embedding.
 2. **At the start** (`src/embedder.rs`): `embed_missing` embeds the recipes whose embedding is NULL,
    64 at a time, and writes each batch with a single `UPDATE ... FROM UNNEST(...)`. The embedded
-   text is the name, the cuisine, the course and the description:
-   `Miso soup, a vegetarian japanese soup. Light dashi broth with miso paste...`
+   text is the name, the cuisine, the course and the description, after the `passage: ` prefix
+   E5 was trained with: `passage: Miso soup, a vegetarian japanese soup. Light dashi broth...`
 3. **On create and update** (`src/recipe.rs`): the payload is the text of the recipe only. The
    `embedding` field of `NewRecipe` and `UpdatableRecipe` is `#[serde(skip)]`, filled by their
    `BeforeSave` hook, so a new or edited recipe is found by the searches at once. The `Recipe`
    model has no `embedding` field: the 384 numbers stay in the database.
-4. **The search** (`src/recipe_search.rs`): `GET /recipe/search` embeds `q`, then calls
+4. **The search** (`src/recipe_search.rs`): `GET /recipe/search` embeds `q` after the `query: `
+   prefix, then calls
    `Recipe::list` with `near` set to its vector. `SqlxFilter` applies the filters in `WHERE` and
    orders the rows by `embedding <=> $1`, nearest first.
 5. **The similar recipes** (`src/recipe_similar.rs`): a `HasMany` relation reading the embedding of
@@ -72,7 +74,9 @@ recipe and embeds nothing.
 
 ## Searching
 
-`q` is what you feel like eating, in English. The other parameters filter the recipes:
+`q` is what you feel like eating, in English, in French or in another of the languages of the
+model: a text and its translation have close embeddings, so a French search finds the recipes
+written in English. The other parameters filter the recipes:
 
 | Parameter | Filter | Example |
 | --- | --- | --- |
@@ -86,17 +90,27 @@ recipe and embeds nothing.
 ```bash
 # by meaning, not by words
 curl -G localhost:8085/v1/recipe/search --data-urlencode 'q=something warm and comforting for a cold winter evening' -d limit=5
-# Glogg, Mulled wine, Bissara, Shepherds pie, Boeuf bourguignon
+# Janssons temptation, Glogg, Boeuf bourguignon, Ayib, Mulled wine
 
 curl -G localhost:8085/v1/recipe/search --data-urlencode 'q=dessert with chocolate' -d limit=4
-# Brownies, Bread and butter pudding, Chocolate mousse, Churros con chocolate
+# Chocolate mousse, Brownies, Chocolate chip cookies, Churros
 
 # the filters apply before the order: vegetarian, ready in 20 minutes at most
 curl -G localhost:8085/v1/recipe/search --data-urlencode 'q=quick refreshing summer dish' -d vegetarian=true -d minutes_lte=20 -d limit=5
-# Morning glory stir fry, Morning glory with garlic, Mint lemonade, Caprese salad, Stir fried bok choy
+# Fattoush, Cucumber sunomono, Eton mess, Hummus, Mint lemonade
 
 curl -G localhost:8085/v1/recipe/search --data-urlencode 'q=spicy noodle soup' -d cuisine=korean -d limit=3
-# Sundubu jjigae, Kimchi jjigae, Naengmyeon
+# Sundubu jjigae, Kimchi jjigae, Doenjang jjigae
+
+# in French, over the same recipes written in English
+curl -G localhost:8085/v1/recipe/search --data-urlencode "q=quelque chose de chaud et réconfortant pour une soirée d'hiver" -d limit=5
+# Janssons temptation, Glogg, Vichyssoise, Mulled wine, Sikhye
+
+curl -G localhost:8085/v1/recipe/search --data-urlencode 'q=un dessert au chocolat' -d limit=4
+# Brownies, Chocolate mousse, Churros, Chocolate chip cookies
+
+curl -G localhost:8085/v1/recipe/search --data-urlencode 'q=soupe de nouilles épicée' -d cuisine=korean -d limit=3
+# Sundubu jjigae, Kimchi jjigae, Doenjang jjigae
 ```
 
 An empty `q` is answered 400 `{"code": "BAD_REQUEST", "message": "`q` must tell what to search"}`.
@@ -117,7 +131,7 @@ stored embedding of the recipe and embeds nothing: no model call, a single index
 
 | Parameter | Filter | Example |
 | --- | --- | --- |
-| `min_similarity` | The least cosine similarity, from -1 to 1, none by default | `min_similarity=0.8` |
+| `min_similarity` | The least cosine similarity, from -1 to 1, none by default | `min_similarity=0.9` |
 | `other_cuisine` | Only the recipes of another cuisine with `true` | `other_cuisine=true` |
 | `limit` | 5 recipes by default, 100 at most | `limit=4` |
 
@@ -128,19 +142,19 @@ embedding yet is answered 404 as well.
 ```bash
 # the recipes closest to the tonkotsu ramen (id 41)
 curl 'localhost:8085/v1/recipe/41/similar?limit=4'
-# [{"id":67,"name":"Wonton soup","cuisine":"chinese","course":"soup","similarity":0.82}, Samgyetang 0.786,
-#  Udon noodle soup 0.785, Hot and sour soup 0.779]
+# [{"id":45,"name":"Tonkatsu","cuisine":"japanese","course":"main","similarity":0.916}, Sundubu jjigae 0.912,
+#  Udon noodle soup 0.910, Wonton soup 0.902]
 
 # the same dish elsewhere in the world: only the recipes of another cuisine
 curl 'localhost:8085/v1/recipe/1/similar?other_cuisine=true&limit=4'
-# Spaghetti carbonara: Chow mein 0.677, Kefta tagine 0.670, Mac and cheese 0.669, Calamares a la romana 0.669
+# Spaghetti carbonara: Pastitsio 0.880, Moussaka 0.860, Spanakopita 0.851, Pisto manchego 0.848
 
-# only the recipes at least 80 % similar
-curl 'localhost:8085/v1/recipe/41/similar?min_similarity=0.8'
-# Wonton soup 0.82
+# only the recipes at least 90.5 % similar
+curl 'localhost:8085/v1/recipe/41/similar?min_similarity=0.905'
+# Tonkatsu 0.916, Sundubu jjigae 0.912, Udon noodle soup 0.910
 ```
 
-With this model, unrelated recipes are still around 0.5 similar: compare the similarities with each
+With this model, unrelated recipes are still around 0.8 similar: compare the similarities with each
 other rather than with a fixed scale.
 
 ## Adding a recipe
@@ -158,7 +172,9 @@ curl -X POST localhost:8085/v1/recipe -H 'content-type: application/json' -d '{
 }'
 
 curl -G localhost:8085/v1/recipe/search --data-urlencode 'q=cold noodles when it is very hot outside' -d limit=3
-# Naengmyeon, Chilled soba, Kimchi jjigae
+# Naengmyeon, Chilled soba, Hotteok
+curl -G localhost:8085/v1/recipe/search --data-urlencode 'q=nouilles froides quand il fait très chaud' -d limit=3
+# Naengmyeon, Chilled soba, Chow mein
 ```
 
 A `PUT` embeds the new text again, so the recipe moves in the searches with its description.
@@ -188,7 +204,7 @@ DataLoader), so keep the `limit` of the list small when asking for `similar`.
 ```graphql
 # by meaning, the filters applying first
 { searchRecipes(q: "spicy noodle soup", cuisine: "korean", limit: 3) { id name } }
-# Sundubu jjigae, Kimchi jjigae, Naengmyeon
+# Sundubu jjigae, Kimchi jjigae, Doenjang jjigae
 
 # a recipe and the recipes closest to it, in one query
 {
@@ -197,7 +213,7 @@ DataLoader), so keep the `limit` of the list small when asking for `similar`.
     similar(limit: 3) { name cuisine similarity }
   }
 }
-# Tonkotsu ramen: Wonton soup 0.82, Samgyetang 0.786, Udon noodle soup 0.785
+# Tonkotsu ramen: Tonkatsu 0.916, Sundubu jjigae 0.912, Udon noodle soup 0.910
 
 # the similar recipes of each result of a search, here from another cuisine
 {
@@ -206,8 +222,8 @@ DataLoader), so keep the `limit` of the list small when asking for `similar`.
     similar(limit: 2, otherCuisine: true) { name cuisine similarity }
   }
 }
-# Brownies: Bread and butter pudding 0.767, Baklava 0.765
-# Bread and butter pudding: Egg tarts 0.822, Baklava 0.807
+# Chocolate mousse: Mochi 0.894, Chocolate chip cookies 0.888
+# Brownies: Churros 0.897, Mochi 0.887
 
 # the input has no embedding, `before_save` computes it
 mutation {
@@ -228,7 +244,7 @@ mutation { deleteRecipe(id: 341) { id deletedAt } }
 ```bash
 curl localhost:8085/graphql -H 'content-type: application/json' \
   -d '{"query": "{ searchRecipes(q: \"dessert with chocolate\", limit: 2) { name } }"}'
-# {"data":{"searchRecipes":[{"name":"Brownies"},{"name":"Bread and butter pudding"}]}}
+# {"data":{"searchRecipes":[{"name":"Chocolate mousse"},{"name":"Brownies"}]}}
 ```
 
 An empty `q` is answered with the error "`q` must tell what to search", an unknown recipe with
@@ -236,10 +252,11 @@ An empty `q` is answered with the error "`q` must tell what to search", an unkno
 
 ## Going further
 
-- **Another model**: change `EmbeddingModel::BGESmallENV15` in `src/embedder.rs` and the size of
-  the column, `vector(384)`, in the migration. A multilingual model, `MultilingualE5Small`, would
-  answer searches in French over English recipes. Recompute the embeddings by setting them to NULL:
-  `UPDATE recipe SET embedding = NULL`, then restart.
+- **Another model**: change `EmbeddingModel::MultilingualE5Small` in `src/embedder.rs`, its
+  prefixes (`query: ` and `passage: ` for E5, an instruction before the query only for BGE), and
+  the size of the column, `vector(384)`, in a new migration. Recompute the embeddings by setting
+  them to NULL, `UPDATE recipe SET embedding = NULL`, as `20261009000002_reembed_multilingual.sql`
+  does, then restart. `BGESmallENV15` is smaller (130 MB) but answers in English only.
 - **A hosted model**: replace `Embedder` by a call to an embedding API (OpenAI
   `text-embedding-3-small`, 1536 dimensions, `vector(1536)`). The routes do not change.
 - **Hybrid search**: combine the distance with a keyword match, a `tsvector` column and `@@`, in a

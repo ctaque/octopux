@@ -75,7 +75,7 @@ mod tests {
             "scalar SparseVector",
             "embedding: Vector!",
             "keywords: SparseVector",
-            "articles(offset: Int, limit: Int, category: String, near: Vector, keywords: SparseVector): [Article!]!",
+            "articles(offset: Int, limit: Int, category: String, keywords: SparseVector): [Article!]!",
             "createArticle(input: NewArticle!): Article!",
         ] {
             assert!(sdl.contains(expected), "`{}` missing from\n{}", expected, sdl);

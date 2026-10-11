@@ -15,7 +15,7 @@ cargo run              # migrates, seeds 8 articles, listens on 127.0.0.1:8085
 
 | Route | Action |
 | --- | --- |
-| `GET /v1/article` | List a page of articles, filtered by `category`, ordered by `near`, `near_l2` or `keywords` |
+| `GET /v1/article` | List a page of articles, filtered by `category`, ordered by `keywords` |
 | `GET /v1/article/{id}` | Find an article |
 | `POST /v1/article` | Create an article |
 | `PUT /v1/article/{id}` | Update an article |
@@ -24,23 +24,18 @@ cargo run              # migrates, seeds 8 articles, listens on 127.0.0.1:8085
 
 Swagger UI is served on `/swagger`, GraphiQL on `GET /graphql`.
 
-The list is ordered by the distance of the vectors to the one of its query string (`SqlxFilter`
-derive, `op = "nearest"`), nearest first, then by `sort`; `limit` keeps the `k` nearest articles:
+The list is ordered by the inner product of the keywords with the ones of its query string
+(`SqlxFilter` derive, `op = "nearest"`), the largest first, then by `sort`; `limit` keeps the `k`
+nearest articles:
 
 | Parameter | Order | Example |
 | --- | --- | --- |
-| `near=[cooking,sport,tech,travel]` | `embedding <=> $1`, cosine distance | `?near=0.8,0,0,0.6` |
-| `near_l2=[...]` | `embedding <-> $1`, Euclidean distance | `?near_l2=[0,0,1,0]` |
 | `keywords={index:weight,...}/8` | `keywords <#> $1`, the largest inner product first | `?keywords={5:1,6:1}/8` |
 
+The embeddings are never sent in a query: the articles similar to one are found from the embedding
+stored in the database, by `GET /v1/article/{id}/similar`.
+
 ```bash
-# the articles about cooking and travel
-curl 'localhost:8085/v1/article?near=0.8,0,0,0.6&limit=3'
-# Ramen in Tokyo, Carbonara in ten minutes, Hiking in the Japanese Alps
-
-# the tech articles, the closest to pure tech first
-curl 'localhost:8085/v1/article?category=tech&near=[0,0,1,0.1]'
-
 # the articles about japan and mountains, the sparse vector having its indices from 1
 curl -G localhost:8085/v1/article --data-urlencode 'keywords={5:1,6:1}/8' --data-urlencode limit=3
 # Hiking in the Japanese Alps, Trail running in the Alps, Ramen in Tokyo
@@ -64,8 +59,8 @@ In JSON, a sparse vector is `{"dimensions", "indices", "values"}` with its indic
 (`japan` is 4); in a query string or as a GraphQL string, it is the literal of pgvector,
 `{5:1,7:1}/8`, with its indices from 1.
 
-A vector of another size than its column (`?near=1,0`, an embedding of 2 numbers) is answered 400
-`BAD_REQUEST`, as is an invalid vector (`?near=1,x`).
+A vector of another size than its column (`?keywords={1:1}/2`, keywords of 2 dimensions) is answered
+400 `BAD_REQUEST`, as is an invalid vector (`?keywords={1:x}/8`).
 
 ## GraphQL
 
@@ -78,19 +73,8 @@ a list of numbers and an object, as in the REST routes, or the literal of pgvect
 # an article and its vectors, the sparse vector as JSON with its indices from 0
 { article(id: 2) { title embedding keywords } }
 
-# the 3 articles about cooking and travel, by cosine distance
-{ articles(near: [0.8, 0, 0, 0.6], limit: 3) { title category } }
-
-# the tech articles, the closest to pure tech first
-{ articles(category: "tech", near: [0, 0, 1, 0.1]) { id title } }
-
 # the articles about japan and mountains, the sparse vector as the literal of pgvector
 { articles(keywords: "{5:1,6:1}/8", limit: 3) { title keywords } }
-
-# the vector as a variable, of the Vector type
-query Near($near: Vector!, $limit: Int) {
-  articles(near: $near, limit: $limit) { id title embedding }
-}
 
 # the sparse vector as a variable, of the SparseVector type
 query Keywords($keywords: SparseVector!) {
@@ -98,19 +82,10 @@ query Keywords($keywords: SparseVector!) {
 }
 ```
 
-The variables of `Near`, the articles nearest to sport, and of `Keywords`, pasta and recipe as JSON
-(indices from 0):
-
-```json
-{ "near": [0, 1, 0, 0.2], "limit": 2 }
-```
+The variables of `Keywords`, pasta and recipe as JSON (indices from 0):
 
 ```json
 { "keywords": { "dimensions": 8, "indices": [0, 6], "values": [1, 1] } }
-```
-
-```json
-{"data":{"articles":[{"id":6,"title":"The World Cup final","embedding":[0.0,1.0,0.1,0.1]},{"id":3,"title":"Trail running in the Alps","embedding":[0.0,0.9,0.05,0.5]}]}}
 ```
 
 ```json
@@ -143,8 +118,7 @@ mutation { deleteArticle(id: 9) { id title deletedAt } }
 {"data":{"createArticle":{"id":9,"title":"Pasta al pesto","embedding":[0.95,0.0,0.0,0.05],"keywords":{"dimensions":8,"indices":[0,6],"values":[1.0,1.0]},"createdAt":"2026-10-07T15:15:16.347989+00:00"}}}
 ```
 
-The variables of `Move`, the article moved from cooking to travel, which then comes first in
-`articles(near: [0, 0, 0, 1])`:
+The variables of `Move`, the article moved from cooking to travel:
 
 ```json
 {
@@ -165,12 +139,6 @@ curl localhost:8085/graphql -H 'content-type: application/json' \
 # {"data":{"article":{"title":"Ramen in Tokyo","embedding":[0.7,0.0,0.05,0.7],"keywords":{"dimensions":8,"indices":[4,6],"values":[1.0,0.5]}}}}
 
 curl localhost:8085/graphql -H 'content-type: application/json' -d '{
-  "query": "query Near($near: Vector!) { articles(near: $near, limit: 1) { id title } }",
-  "variables": { "near": [0, 0, 1, 0] }
-}'
-# {"data":{"articles":[{"id":4,"title":"Postgres as a vector database"}]}}
-
-curl localhost:8085/graphql -H 'content-type: application/json' -d '{
   "query": "mutation New($input: NewArticle!) { createArticle(input: $input) { id embedding keywords } }",
   "variables": { "input": {
     "title": "Sushi at home",
@@ -186,6 +154,6 @@ An invalid vector is a GraphQL error: ``Failed to parse "Vector": invalid vector
 ## With real embeddings
 
 Compute the embedding of each article with a model (`text-embedding-3-small` gives 1536 dimensions),
-store it in a `vector(1536)` column, and compute the embedding of the search text the same way
-before filling `near`. pgvector indexes a `vector` of at most 2000 dimensions with HNSW, a `halfvec`
+store it in a `vector(1536)` column, and compute the embedding of the search text the same way, in
+the backend: the clients send the text, never a vector (see the `recipes` example). pgvector indexes a `vector` of at most 2000 dimensions with HNSW, a `halfvec`
 (`pgvector::HalfVector`) of at most 4000.

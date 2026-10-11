@@ -59,7 +59,7 @@ use schemars::JsonSchema;
 #[derive(Default, Deserialize, JsonSchema, ApiComponent)]
 pub struct FindQuery {}
 // The filters of the list, and its similarity search: `SqlxFilter` orders the articles by the
-// distance of their vectors to the vector of the query, nearest first
+// inner product of their keywords with the ones of the query, nearest first
 #[derive(Default, Deserialize, JsonSchema, ApiComponent, SqlxFilter)]
 #[sqlx_filter(database = "postgres")]
 pub struct ListQuery {
@@ -69,16 +69,6 @@ pub struct ListQuery {
     pub limit: Option<usize>,
     /// The articles of a category: `category = ...`
     pub category: Option<String>,
-    /// The articles nearest to this vector, by cosine distance: `ORDER BY embedding <=> ...`,
-    /// `[cooking,sport,tech,travel]`
-    #[sqlx_filter(column = "embedding", op = "nearest")]
-    // a string in the query string, not an array exploded into `near=...&near=...`
-    #[schemars(with = "Option<String>")]
-    pub near: Option<Vector>,
-    /// The articles nearest to this vector, by Euclidean distance: `ORDER BY embedding <-> ...`
-    #[sqlx_filter(column = "embedding", op = "nearest", distance = "l2")]
-    #[schemars(with = "Option<String>")]
-    pub near_l2: Option<Vector>,
     /// The articles sharing the most weight with these keywords, by inner product:
     /// `ORDER BY keywords <#> ...`, `{1:1,7:1}/8` with the indices from 1
     #[sqlx_filter(column = "keywords", op = "nearest", distance = "inner_product")]
@@ -151,18 +141,17 @@ impl ArticleQuery {
         find(id, app_state(ctx)?).await
     }
 
-    /// A page of articles, filtered and ordered as `GET /v1/article`: `near` orders them by the
-    /// cosine distance of their embedding, `keywords` by the inner product of their keywords
+    /// A page of articles, filtered and ordered as `GET /v1/article`: `keywords` orders them by the
+    /// inner product of their keywords
     async fn articles(
         &self,
         ctx: &Context<'_>,
         offset: Option<usize>,
         limit: Option<usize>,
         category: Option<String>,
-        near: Option<Vector>,
         keywords: Option<SparseVector>,
     ) -> async_graphql::Result<Vec<Article>> {
-        let query = ListQuery { offset, limit, category, near, keywords, ..ListQuery::default() };
+        let query = ListQuery { offset, limit, category, keywords, ..ListQuery::default() };
         Ok(Article::list(&query, app_state(ctx)?).await?)
     }
 }

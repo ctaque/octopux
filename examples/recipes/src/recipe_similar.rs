@@ -23,7 +23,7 @@ pub struct RecipeSimilarQuery {
 }
 
 /// A recipe similar to another one, and how similar: the cosine similarity of their embeddings,
-/// 1 for the same text, around 0.5 for unrelated recipes with this model
+/// 1 for the same text, around 0.8 for unrelated recipes with this model
 #[derive(Serialize, JsonSchema, ApiComponent, SimpleObject, sqlx::FromRow)]
 pub struct SimilarRecipe {
     pub id: Id,

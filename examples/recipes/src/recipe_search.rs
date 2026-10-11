@@ -13,7 +13,8 @@ use crate::shared::AppState;
 
 #[derive(Deserialize, JsonSchema, ApiComponent)]
 pub struct SearchQuery {
-    /// What you feel like eating, in English: `something warm and comforting for a rainy evening`
+    /// What you feel like eating, in English, French or another language:
+    /// `something warm and comforting for a rainy evening`, `un dessert au chocolat`
     pub q: String,
     /// Number of rows to skip
     pub offset: Option<usize>,
@@ -68,7 +69,7 @@ impl From<octopux::anyhow::Error> for SearchError {
 /// Searches the recipes by meaning
 ///
 /// Computes the embedding of `q` with the model of the recipes, then lists the recipes as
-/// `GET /recipe?near=...`: the filters apply, and the recipes nearest to the search come first.
+/// `GET /recipe`: the filters apply, and the recipes nearest to the search come first.
 #[api_operation(tag = "recipe", operation_id = "search_recipes")]
 pub async fn search(query: Query<SearchQuery>, state: Data<AppState>) -> Result<Json<Vec<Recipe>>, SearchError> {
     Ok(Json(search_recipes(query.into_inner(), &state).await?))
