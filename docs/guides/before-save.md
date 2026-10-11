@@ -25,3 +25,5 @@ impl BeforeSave<AppState> for NewUser {
     }
 }
 ```
+
+The [`before-save`](https://github.com/ctaque/octopux/tree/main/examples/before-save) example hashes a password on create and validates an email on create and update.
