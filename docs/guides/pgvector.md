@@ -144,7 +144,7 @@ The CLI writes:
 - `<table>_search.rs`: the `BeforeSave` implementations, `GET /<model>/search?q=...`, the `search<Models>` GraphQL query, and `embed_missing` for the rows saved before.
 - with `--bootstrap`, the embedder in `AppState`.
 
-It then offers `GET /<model>/{id}/similar`, see [`generate-relation --nearest`]({{ '/cli/generate-relation/' | relative_url }}#nearest-children).
+It then offers `GET /<model>/{id}/similar`, see [`generate-relation --nearest`]({{ '/cli/generate-relation/' | relative_url }}#nearest-neighbour).
 
 Mount the search first: `.configure(book_search::configure).configure(book::configure)`. The model is downloaded on the first run into `.fastembed_cache`.
 

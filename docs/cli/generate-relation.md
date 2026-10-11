@@ -11,7 +11,7 @@ nav_order: 2
 | `--parent`, `--child` | The two models |
 | `--foreign-key` | The column of the child referencing the parent, `project_id` by default |
 | `--through` | Many-to-many: the join model |
-| `--nearest <column>` | The children nearest to the parent by their vectors instead of the ones referencing it, `<column>` being the vector of the parent: see [below](#nearest-children). Requires `--postgres --sqlx` |
+| `--nearest <column>` | The children nearest to the parent by their vectors instead of the ones referencing it, `<column>` being the vector of the parent: see [below](#nearest-neighbour). Requires `--postgres --sqlx` |
 | `--sort <columns>` | The columns of the child the children can be sorted by, `title,created_at`: see [below](#sort). The fields of the child model by default |
 | `--name` | The route segment, `books` by default (`similar` or `nearest_<children>` with `--nearest`) |
 | `--sqlx`, `--migration`, `--timestamps`, `--openapi`, `--graphql`, database flags, `--schema`, `--output`, `--force` | As for [`generate-model`]({{ '/cli/generate-model/' | relative_url }}) |
@@ -37,7 +37,7 @@ curl 'localhost:8080/v1/project/1/books?sort=-created_at,title'
 
 The columns allowed are in the `SORT_COLUMNS` constant of the relation file, any other one being answered 400 `BAD_REQUEST`: those of `--sort`, or the fields of the child model, but those skipped by serde, the vectors, geometries and JSON values and `deleted_at`. `id` is always allowed, and ends the `ORDER BY` so that the pages neither overlap nor skip rows. With `--graphql`, the field of the relation takes `sort` and `order` too: `{ project(id: 1) { books(sort: "-created_at") { title } } }`.
 
-## Nearest children
+## Nearest neighbour
 
 With `--nearest`, the relation lists the children nearest to the parent by the cosine distance of their vector to the vector of the parent, the most similar first, with their similarity: `[{ "similarity": 0.92, "recipe": {...} }]`. The child must have been generated with [the semantic search]({{ '/guides/pgvector/' | relative_url }}#semantic-search-generated-by-the-cli): the relation selects the children along the column of its `near` filter, and needs no embedder, the vectors being in the database.
 
