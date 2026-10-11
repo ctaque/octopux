@@ -21,6 +21,10 @@ nav_order: 1
 | `--output` | The folder of the file (`--output=src/models`) |
 | `--force` | Overwrite an existing file |
 
+With `--sqlx`, `list` is paginated by `offset` and `limit`, and sorted by `sort` and `order` (`?sort=-created_at,title&order=asc`, also the arguments of the GraphQL list query): `sort` accepts `id`, the fields and the timestamps but `deleted_at`, the vectors, geometries and JSON values left out. `add-field` adds the new fields to these columns. See [Filtering and sorting]({{ '/guides/filtering-and-sorting/' | relative_url }}).
+
+With `--sqlx --postgres`, a `pgvector::Vector` field can be computed from the text fields of the model with fastembed, and searched by meaning: see [the semantic search]({{ '/guides/pgvector/' | relative_url }}#semantic-search-generated-by-the-cli).
+
 ## Entering fields
 
 When asked for the fields, type `name:type` (e.g. `title:String`, or `stars:2` to pick from the menu). A trailing `?` makes the field optional (`stars:i32?`), `-` removes the last one, and an empty name ends the input:

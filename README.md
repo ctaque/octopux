@@ -243,7 +243,7 @@ octopux generate-model --name Book --fields --sqlx --migration --foreign-keys --
 octopux generate-relation --parent Author --child Book --foreign-key=author_id --sqlx --migration --graphql --sqlite
 ```
 
-Each model gets the `author(id)` and `authors(offset, limit)` queries and the `createAuthor`, `updateAuthor` and `deleteAuthor` mutations, merged into the schema of `src/main.rs`. Relations become fields:
+Each model gets the `author(id)` and `authors(offset, limit, sort, order)` queries and the `createAuthor`, `updateAuthor` and `deleteAuthor` mutations, merged into the schema of `src/main.rs`. Relations become fields:
 
 ```graphql
 query {

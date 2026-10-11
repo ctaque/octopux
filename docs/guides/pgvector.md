@@ -6,19 +6,17 @@ nav_order: 8
 
 # pgvector
 
-Enable the feature, with `postgres` in the features of sqlx:
-
 ```bash
-cargo add octopux --features sqlx,pgvector         # add graphql for the GraphQL scalars
+cargo add octopux --features sqlx,pgvector         # sqlx with `postgres`; add graphql for the GraphQL scalars
 ```
 
-The vectors are computed and read by the backend only: the clients send text and receive rows, never an embedding nor a sparse vector of keywords. The backend embeds the text it receives, before a save or before a search, and keeps the vectors in the database.
+The `vector`, `halfvec` and `sparsevec` columns of [pgvector](https://github.com/pgvector/pgvector) become the `Vector`, `HalfVector` and `SparseVector` fields of the sqlx models.
+
+The vectors stay on the backend: clients send text and receive rows. The backend embeds the text before a save or a search.
 
 ## Vector fields
 
-With the `pgvector` feature, the `vector`, `halfvec` and `sparsevec` columns of [pgvector](https://github.com/pgvector/pgvector) are fields of the sqlx models, read and written in the binary format of pgvector. `Vector` and `HalfVector` are arrays of numbers (`Deref` to `Vec<f32>`); a `HalfVector` is rounded to half precision in the database, which halves the column and its index. A `SparseVector` is its dimensions and its non-zero values with their indices, from 0.
-
-The model sent to the clients leaves the vector out: the column stays in the database, and the rows are read without it.
+The model sent to the clients leaves the vector out:
 
 ```rust
 #[derive(Serialize, Deserialize, sqlx::FromRow, HttpFindListDelete, SqlxModel)]
@@ -33,7 +31,7 @@ pub struct Article {
 }
 ```
 
-The models of the inserts and of the updates hold the vector, skipped from the payload and from the GraphQL input, and `before_save` computes it from the text:
+The insert and update models hold it, skipped from the payload, and `before_save` computes it:
 
 ```rust
 use octopux::pgvector::Vector;
@@ -44,7 +42,6 @@ use octopux::pgvector::Vector;
 pub struct NewArticle {
     pub title: String,
     pub body: String,
-    /// Computed by `before_save`, never read from the payload
     #[serde(skip)]
     #[graphql(skip)]
     pub embedding: Option<Vector>,
@@ -59,62 +56,43 @@ impl BeforeSave<AppState> for NewArticle {
 }
 ```
 
-A payload with an `embedding` is accepted, and its vector ignored. The same goes for an `UpdatableArticle`, embedded again before the update.
-
 ## Similarity search
 
-[`SqlxFilter`]({{ '/guides/filtering-and-sorting/' | relative_url }}) orders a list by the distance of a column to the vector of the query, nearest first, with `op = "nearest"`; `limit` keeps the `k` nearest rows. The vector field is skipped from the query string and from the OpenAPI document: only the backend sets it.
+A [`SqlxFilter`]({{ '/guides/filtering-and-sorting/' | relative_url }}) field with `op = "nearest"` orders the list by distance, nearest first; `limit` keeps the `k` nearest rows. Skip it from the query string so that only the backend sets it:
 
 ```rust
 #[derive(Default, Deserialize, JsonSchema, ApiComponent, SqlxFilter)]
 #[sqlx_filter(database = "postgres")]
 pub struct ListQuery {
-    pub offset: Option<usize>,
     pub limit: Option<usize>,
     pub category: Option<String>,
-    // Set by the search only, from the embedding of its text
     #[sqlx_filter(column = "embedding", op = "nearest")]
     #[serde(skip)]
     #[schemars(skip)]
     pub near: Option<pgvector::Vector>,
-    #[sqlx_filter(sort = "title")]
-    pub sort: Option<String>,                     // orders the rows at the same distance
 }
 ```
 
-A search route takes the text, embeds it, and lists the rows with the vector:
+The search embeds the text and lists the rows:
 
 ```rust
-#[derive(Deserialize, JsonSchema, ApiComponent)]
-pub struct SearchQuery {
-    pub q: String,                                // ?q=ramen in tokyo&category=travel
-    pub limit: Option<usize>,
-    pub category: Option<String>,
-}
-
 pub async fn search_articles(query: SearchQuery, state: &AppState) -> anyhow::Result<Vec<Article>> {
-    if query.q.trim().is_empty() {
-        return Err(octopux::Error::BadRequest("`q` must tell what to search".into()).into());
-    }
     let near = Some(state.embedder.embed_query(&query.q).await?);
-    let list = ListQuery { limit: query.limit, category: query.category, near, ..ListQuery::default() };
+    let list = ListQuery { limit: query.limit, category: query.category, near };
     Ok(Article::list(&list, state).await?)
 }
-
-// before the routes of the endpoint, so that `search` is not taken for an `{id}`
-pub fn configure(cfg: &mut apistos::web::ServiceConfig) {
-    cfg.route("/article/search", apistos::web::get().to(search));
-}
 ```
+
+Mount `/article/search` before the routes of the model, so that `search` is not taken for an `{id}`. The other filters still apply.
 
 | `distance` | Order | HNSW operator class |
 | --- | --- | --- |
-| `cosine` (default) | `column <=> value` | `vector_cosine_ops` |
-| `l2` | `column <-> value` | `vector_l2_ops` |
-| `inner_product` | `column <#> value`, the largest inner product first | `vector_ip_ops` |
-| `l1` | `column <+> value` | `vector_l1_ops` |
+| `cosine` (default) | `<=>` | `vector_cosine_ops` |
+| `l2` | `<->` | `vector_l2_ops` |
+| `inner_product` | `<#>`, largest first | `vector_ip_ops` |
+| `l1` | `<+>` | `vector_l1_ops` |
 
-The conditions of the other fields still apply, and the distance orders the rows before the columns of the `sort` field. A sparse vector of keywords is set the same way, by the backend, with `distance = "inner_product"`. Index the column with HNSW and the operator class of the distance (`halfvec_cosine_ops`, `sparsevec_cosine_ops`... for the other types), up to 2000 dimensions for a `vector`, 4000 for a `halfvec`:
+Index the column with the operator class of the distance (`halfvec_*_ops`, `sparsevec_*_ops` for the other types):
 
 ```sql
 CREATE INDEX article_embedding_idx ON article USING hnsw (embedding vector_cosine_ops);
@@ -122,72 +100,54 @@ CREATE INDEX article_embedding_idx ON article USING hnsw (embedding vector_cosin
 
 ## Similar rows
 
-The rows similar to a row reuse its stored vector, and embed nothing: a [`HasMany`]({{ '/guides/relations/' | relative_url }}) relation reads the vector of the row, then orders the others by their distance to it, in a single indexed query.
+The rows similar to a row reuse its stored vector, nothing is embedded: a [`HasMany`]({{ '/guides/relations/' | relative_url }}) relation reads it, then orders the other rows by distance.
 
-```rust
-async fn list_related(id: Id, query: &ArticleSimilarQuery, state: &AppState) -> Result<Option<Vec<SimilarArticle>>> {
-    let Some(embedding) = sqlx::query_scalar::<_, Vector>("SELECT embedding FROM article WHERE id = $1 AND embedding IS NOT NULL")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await? else {
-        return Ok(None);                          // 404 ENTITY_NOT_FOUND
-    };
-    let articles = sqlx::query_as::<_, SimilarArticle>(
-        "SELECT id, title, 1 - (embedding <=> $2) AS similarity FROM article
-         WHERE id <> $1 ORDER BY embedding <=> $2 LIMIT $3",
-    )
-    .bind(id)
-    .bind(&embedding)
-    .bind(query.limit.unwrap_or(5) as i64)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Some(articles))
-}
+```sql
+SELECT id, title, 1 - (embedding <=> $2) AS similarity FROM article
+WHERE id <> $1 ORDER BY embedding <=> $2 LIMIT $3
 ```
-
-`GET /v1/article/{id}/similar` answers the rows with their similarity, never their vector.
 
 ## GraphQL and OpenAPI
 
-With the `graphql` feature too, the vectors are the async-graphql scalars `Vector`, `HalfVector` and `SparseVector`, and with `openapi` they are documented as arrays and objects. Keep them out of the schemas all the same: the resolvers take text, and the inputs skip their vector with `#[graphql(skip)]`.
-
-```rust
-#[Object]
-impl ArticleQuery {
-    async fn search_articles(&self, ctx: &Context<'_>, q: String, category: Option<String>, limit: Option<usize>) -> async_graphql::Result<Vec<Article>> {
-        Ok(search_articles(SearchQuery { q, category, limit }, app_state(ctx)?).await?)
-    }
-
-    async fn articles(&self, ctx: &Context<'_>, category: Option<String>, limit: Option<usize>) -> async_graphql::Result<Vec<Article>> {
-        let query = ListQuery { limit, category, near: None, ..ListQuery::default() };
-        Ok(Article::list(&query, app_state(ctx)?).await?)
-    }
-}
-
-#[Object]
-impl ArticleMutation {
-    async fn create_article(&self, ctx: &Context<'_>, input: NewArticle) -> async_graphql::Result<Article> {
-        Ok(input.save(&SaveQuery {}, app_state(ctx)?).await?)
-    }
-}
-```
+With `graphql` and `openapi`, the vector types are scalars and documented schemas. Keep them out of the API anyway: resolvers take text, inputs skip the vector with `#[graphql(skip)]`.
 
 ```graphql
 { searchArticles(q: "ramen in tokyo", limit: 2) { id title } }
-
-# the input has no embedding, `before_save` computes it
-mutation {
-  createArticle(input: { title: "Pasta al pesto", body: "Basil, pine nuts, parmesan..." }) { id title }
-}
-```
-
-A test of the schema checks that no vector leaks:
-
-```rust
-let sdl = Schema::build(ArticleQuery, ArticleMutation, EmptySubscription).finish().sdl();
-assert!(!sdl.contains("Vector"), "a vector is exposed in\n{}", sdl);
+mutation { createArticle(input: { title: "Pasta al pesto", body: "Basil, pine nuts..." }) { id } }
 ```
 
 ## CLI and reverse engineering
 
-The CLI proposes the vectors in the field types with `--postgres` (`embedding:pgvector::Vector`) and asks their dimensions: the migration creates the `vector` extension, `vector(1536)` columns and their HNSW indexes for the cosine distance. [`octopux-reverse`]({{ '/reverse-engineering/' | relative_url }}) maps the `vector`, `halfvec` and `sparsevec` columns to these types. The generated models expose these fields: remove them from the model, and skip them in the inserts, the updates and the filters as above. See the [`recipes`](https://github.com/ctaque/octopux/tree/main/examples/recipes) example for a semantic search over 340 recipes, embedded by the backend with fastembed, and its search page.
+With `--postgres`, the CLI offers `pgvector::Vector` field types: the migration creates the extension, the `vector(n)` column and its HNSW cosine index. [`octopux-reverse`]({{ '/reverse-engineering/' | relative_url }}) maps the pgvector columns to these types; hide the fields as above.
+
+### Semantic search generated by the CLI
+
+With `--sqlx --postgres`, `generate-model` and `add-field` offer to compute a `pgvector::Vector` field from the text of the model with [fastembed](https://github.com/Anush008/fastembed-rs), locally on the CPU:
+
+```
+? `embedding` is a vector: compute it from the text of the model with fastembed, and search the model by meaning? (y/N) y
+? Embedding model › [MultilingualE5Small]
+? Fields `embedding` is computed from › [title, summary]
+```
+
+| Model | Dimensions | |
+| --- | --- | --- |
+| `MultilingualE5Small` | 384 | multilingual |
+| `MultilingualE5Base` | 768 | multilingual, more precise, slower |
+| `BGESmallENV15` | 384 | English |
+| `BGEBaseENV15` | 768 | English, more precise, slower |
+| `AllMiniLML6V2` | 384 | English, fastest |
+
+The CLI writes:
+
+- `src/embedder.rs`: the fastembed model, shared by all the searches. Your code depends on fastembed, octopux does not: edit it freely.
+- `<table>_search.rs`: the `BeforeSave` implementations, `GET /<model>/search?q=...`, the `search<Models>` GraphQL query, and `embed_missing` for the rows saved before.
+- with `--bootstrap`, the embedder in `AppState`.
+
+It then offers `GET /<model>/{id}/similar`, see [`generate-relation --nearest`]({{ '/cli/generate-relation/' | relative_url }}#nearest-children).
+
+Mount the search first: `.configure(book_search::configure).configure(book::configure)`. The model is downloaded on the first run into `.fastembed_cache`.
+
+The search always answers the nearest rows, even unrelated ones: filter on `similarity`. Its scale depends on the model (unrelated rows stay below ~0.8 with E5, ~0.55 with BGE, ~0.3 with AllMiniLML6V2); check a few searches on your data. A vector computed from more text separates better than a title alone.
+
+See the [`recipes`](https://github.com/ctaque/octopux/tree/main/examples/recipes) example: a semantic search over 340 recipes.

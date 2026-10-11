@@ -18,6 +18,8 @@ Asks for fields, as `generate-model --fields`, and inserts them in the `Project`
 | `--schema <name>` | With `--postgres`, the schema of the table: the migration alters `app.project` |
 | `--output` | The folder of the file |
 
+With `--postgres`, on a model deriving `SqlxModel`, a new `pgvector::Vector` field can be computed from the text of the model, and searched by meaning: see [the semantic search]({{ '/guides/pgvector/' | relative_url }}#semantic-search-generated-by-the-cli). `embed_missing` computes the vectors of the existing rows.
+
 {: .warning }
 A non-optional column needs a default for the rows already in the table, enter `?` instead to make the field optional. SQLite only adds a foreign key column when it is nullable, and only with a constant default (no `CURRENT_TIMESTAMP`).
 
