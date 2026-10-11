@@ -11,7 +11,7 @@ nav_order: 2
 | `--parent`, `--child` | The two models |
 | `--foreign-key` | The column of the child referencing the parent, `project_id` by default |
 | `--through` | Many-to-many: the join model |
-| `--nearest <column>` | The children nearest to the parent by their vectors instead of the ones referencing it, `<column>` being the vector of the parent: see [below](#nearest-neighbour). Requires `--postgres --sqlx` |
+| `--nearest <column>` | The nearest neighbours of the parent by their vectors instead of the children referencing it, `<column>` being the vector of the parent: see [below](#nearest-neighbour). Requires `--postgres --sqlx` |
 | `--sort <columns>` | The columns of the child the children can be sorted by, `title,created_at`: see [below](#sort). The fields of the child model by default |
 | `--name` | The route segment, `books` by default (`similar` or `nearest_<children>` with `--nearest`) |
 | `--sqlx`, `--migration`, `--timestamps`, `--openapi`, `--graphql`, database flags, `--schema`, `--output`, `--force` | As for [`generate-model`]({{ '/cli/generate-model/' | relative_url }}) |
@@ -39,13 +39,13 @@ The columns allowed are in the `SORT_COLUMNS` constant of the relation file, any
 
 ## Nearest neighbour
 
-With `--nearest`, the relation lists the children nearest to the parent by the cosine distance of their vector to the vector of the parent, the most similar first, with their similarity: `[{ "similarity": 0.92, "recipe": {...} }]`. The child must have been generated with [the semantic search]({{ '/guides/pgvector/' | relative_url }}#semantic-search-generated-by-the-cli): the relation selects the children along the column of its `near` filter, and needs no embedder, the vectors being in the database.
+With `--nearest`, the relation lists the nearest neighbours of the parent by the cosine distance of their vector to the vector of the parent, the most similar first, with their similarity: `[{ "similarity": 0.92, "recipe": {...} }]`. The child must have been generated with [the semantic search]({{ '/guides/pgvector/' | relative_url }}#semantic-search-generated-by-the-cli): the relation selects the children along the column of its `near` filter, and needs no embedder, the vectors being in the database.
 
 ```bash
-# the other recipes nearest to a recipe: GET /recipe/{id}/similar
+# the nearest neighbours of a recipe among the other recipes: GET /recipe/{id}/similar
 octopux generate-relation --parent Recipe --child Recipe --nearest embedding --postgres --sqlx --openapi --graphql --timestamps
 
-# the wines nearest to a recipe, the two vectors computed by the same model: GET /recipe/{id}/nearest_wines
+# the nearest neighbours of a recipe among the wines, the two vectors computed by the same model: GET /recipe/{id}/nearest_wines
 octopux generate-relation --parent Recipe --child Wine --nearest embedding --postgres --sqlx --openapi --graphql --timestamps
 ```
 
