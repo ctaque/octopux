@@ -2111,6 +2111,147 @@ fn write_source(path: &str, content: &str) -> Result<(), Error> {
     fs::write(path, with_header("//", content))
 }
 
+// `path` without its `.` and `..` components, compared to the src folder without touching the disk
+fn normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other),
+        }
+    }
+    normalized
+}
+
+// The module of the source file `path` (relative to `root` or absolute), following the folders of the src
+// folder of `root`: `crate::models::author` for src/models/author.rs or src/models/author/mod.rs,
+// None for a file outside of src
+fn crate_module(root: &Path, path: &Path) -> Option<String> {
+    let path = normalize(&root.join(path));
+    let relative = path.strip_prefix(normalize(&root.join("src"))).ok()?.with_extension("");
+    let mut segments: Vec<String> = relative.iter().map(|s| s.to_string_lossy().into_owned()).collect();
+    if segments.last().is_some_and(|s| s == "mod") || segments == ["main"] || segments == ["lib"] {
+        segments.pop();
+    }
+    Some(std::iter::once("crate".to_string()).chain(segments).collect::<Vec<_>>().join("::"))
+}
+
+// The name of the module of the source file `path`, its folder for a mod.rs
+fn module_name(path: &Path) -> String {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    match path.parent().and_then(|p| p.file_name()) {
+        Some(folder) if stem == "mod" => folder.to_string_lossy().into_owned(),
+        _ => stem,
+    }
+}
+
+// The path of the module of the file `target` imported from the module of the file `from`: `super::author`
+// for a sibling module, `crate::models::author` for a module of another folder of src, `super::author`
+// when one of them is outside of src, the two modules being then expected side by side
+fn import_path(root: &Path, from: &Path, target: &Path) -> String {
+    let parent = |module: &str| module.rsplit_once("::").map(|(parent, _)| parent.to_string());
+    match (crate_module(root, from), crate_module(root, target)) {
+        (Some(from), Some(target)) if parent(&from).is_some() && parent(&from) == parent(&target) => format!("super::{}", target.rsplit("::").next().unwrap_or_default()),
+        (Some(_), Some(target)) => target,
+        _ => format!("super::{}", module_name(target)),
+    }
+}
+
+// How a generated module is declared in its parent module, `pub` when it is nested in a folder of src,
+// so that the modules of the other folders can import it
+fn declaration_hint(root: &Path, path: &str, module: &str) -> String {
+    match crate_module(root, Path::new(path)) {
+        Some(m) if m.matches("::").count() > 1 => {
+            let parent = m.rsplit_once("::").map_or("crate", |(parent, _)| parent);
+            format!("declare it with `pub mod {};` in the `{}` module", module, parent)
+        }
+        _ => format!("declare it with `mod {};`", module),
+    }
+}
+
+// The source file of the model `entity` of the table `table`: `expected` when it exists, else the
+// `<table>.rs` (or `<table>/mod.rs`) of the src folder of `root` declaring the struct, `expected` when there is none
+fn find_model(root: &Path, expected: &str, table: &str, entity: &str) -> PathBuf {
+    if root.join(expected).exists() {
+        return PathBuf::from(expected);
+    }
+    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for entry in entries {
+            if entry.is_dir() {
+                walk(&entry, found);
+            } else if entry.extension().is_some_and(|e| e == "rs") {
+                found.push(entry);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&root.join("src"), &mut files);
+    let declares = |source: &str| {
+        let decl = format!("struct {}", entity);
+        source.match_indices(&decl).any(|(at, _)| !source[at + decl.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+    };
+    files
+        .into_iter()
+        .filter(|file| module_name(file) == table)
+        .find(|file| fs::read_to_string(file).is_ok_and(|source| declares(&source)))
+        .map(|file| file.strip_prefix(root).map(Path::to_path_buf).unwrap_or(file))
+        .unwrap_or_else(|| PathBuf::from(expected))
+}
+
+// The source files of a relation and of its parent and child models, which import each other
+struct RelationFiles {
+    relation: PathBuf,
+    parent: PathBuf,
+    child: PathBuf,
+}
+
+impl RelationFiles {
+    // The relation in the `output` folder, the models where they are found in src, next to the relation otherwise
+    fn locate(root: &Path, output: Option<&Path>, relation: &Relation) -> RelationFiles {
+        let file = |name: &str| source_path(root, output, &format!("{}.rs", name));
+        RelationFiles {
+            relation: PathBuf::from(file(&relation.module())),
+            parent: find_model(root, &file(&relation.parent_table), &relation.parent_table, &relation.parent),
+            child: find_model(root, &file(&relation.child_table), &relation.child_table, &relation.child),
+        }
+    }
+}
+
+// The paths of the modules of the parent model, of the child model and of the relation, as imported from one of their files
+#[derive(Debug, Clone, PartialEq)]
+struct ModulePaths {
+    parent: String,
+    child: String,
+    relation: String,
+}
+
+impl ModulePaths {
+    // The models and the relation side by side, in the same folder
+    #[cfg(test)]
+    fn siblings(relation: &Relation) -> ModulePaths {
+        ModulePaths {
+            parent: format!("super::{}", relation.parent_table),
+            child: format!("super::{}", relation.child_table),
+            relation: format!("super::{}", relation.module()),
+        }
+    }
+
+    // The paths imported from the source file `from`
+    fn from_file(root: &Path, from: &Path, files: &RelationFiles) -> ModulePaths {
+        ModulePaths {
+            parent: import_path(root, from, &files.parent),
+            child: import_path(root, from, &files.child),
+            relation: import_path(root, from, &files.relation),
+        }
+    }
+}
+
 // `<timestamp>_<suffix>.sql` in the migrations folder next to src
 fn migration_path(suffix: &str) -> Result<PathBuf, Error> {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -2666,31 +2807,33 @@ const RELATION_GRAPHQL_RESOLVER: &str = r#"
 // Field of the relation in the `#[ComplexObject]` of the parent model
 const RELATION_GRAPHQL_FIELD: &str = r#"
         /// The {relation_name} of the {parent_lower_case}, paginated
-        async fn {relation_name}(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::{child_module}::{child}>> {
-            super::{module}::resolve(ctx, self.id, offset, limit).await
+        async fn {relation_name}(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<{child_path}::{child}>> {
+            {relation_path}::resolve(ctx, self.id, offset, limit).await
         }"#;
 
-fn relation_graphql_field(relation: &Relation) -> String {
+// `paths` are the modules as imported from the parent model
+fn relation_graphql_field(relation: &Relation, paths: &ModulePaths) -> String {
     RELATION_GRAPHQL_FIELD
         .replace("{relation_name}", &relation.name)
         .replace("{parent_lower_case}", &relation.parent.to_lowercase())
-        .replace("{child_module}", &relation.child_table)
+        .replace("{child_path}", &paths.child)
         .replace("{child}", &relation.child)
-        .replace("{module}", &relation.module())
+        .replace("{relation_path}", &paths.relation)
 }
 
 // The parent model `source` with the field of the relation inserted after the marker of its `#[ComplexObject]`,
 // unchanged when the field is already there, None without the marker (a model generated without --graphql)
-fn with_relation_field(source: &str, relation: &Relation) -> Option<String> {
+fn with_relation_field(source: &str, relation: &Relation, paths: &ModulePaths) -> Option<String> {
     let at = source.find(GRAPHQL_RELATIONS_MARKER)? + GRAPHQL_RELATIONS_MARKER.len();
-    // `crate::` in the models generated before the sibling modules were imported with `super::`
-    if ["super", "crate"].iter().any(|prefix| source.contains(&format!("{}::{}::resolve(", prefix, relation.module()))) {
+    // whatever the path of the relation module (`super::`, `crate::`, `crate::relations::`)
+    if source.contains(&format!("::{}::resolve(", relation.module())) {
         return Some(source.to_string());
     }
-    Some(format!("{}{}{}", &source[..at], relation_graphql_field(relation), &source[at..]))
+    Some(format!("{}{}{}", &source[..at], relation_graphql_field(relation, paths), &source[at..]))
 }
 
-fn render_relation(relation: &Relation, openapi: bool, graphql: bool, sqlx: bool, timestamps: bool, dialect: Dialect) -> String {
+// `paths` are the modules as imported from the relation
+fn render_relation(relation: &Relation, paths: &ModulePaths, openapi: bool, graphql: bool, sqlx: bool, timestamps: bool, dialect: Dialect) -> String {
     let (imports, derives, service_config, endpoint) = if openapi {
         (
             "\n    use apistos::ApiComponent;\n    use schemars::JsonSchema;\n    use octopux::gen_documented_relation_endpoint;",
@@ -2720,10 +2863,11 @@ fn render_relation(relation: &Relation, openapi: bool, graphql: bool, sqlx: bool
     let child_import = if relation.child_table == relation.parent_table {
         String::new()
     } else {
-        format!("\n    use super::{}::{};", relation.child_table, relation.child)
+        format!("\n    use {}::{};", paths.child, relation.child)
     };
     RELATION_TPL
         .replace("{child_import}", &child_import)
+        .replace("{parent_path}", &paths.parent)
         .replace("{graphql_resolver}", if graphql { RELATION_GRAPHQL_RESOLVER } else { "" })
         .replace("{body}", &body)
         .replace("{query}", query)
@@ -2736,8 +2880,6 @@ fn render_relation(relation: &Relation, openapi: bool, graphql: bool, sqlx: bool
         .replace("{relation}", &relation.type_name())
         .replace("{relation_name}", &relation.name)
         .replace("{module}", &relation.module())
-        .replace("{parent_module}", &relation.parent_table)
-        .replace("{child_module}", &relation.child_table)
         .replace("{parent_lower_case}", &relation.parent.to_lowercase())
         .replace("{parent}", &relation.parent)
         .replace("{child}", &relation.child)
@@ -2754,8 +2896,8 @@ fn render_relation_migration(relation: &Relation, dialect: Dialect) -> String {
 const RELATION_TPL: &str = r#"
     // The application state, declared (or re-exported) at the root of the crate
     use crate::AppState;
-    // The models and the relations are sibling modules, generated in the same folder
-    use super::{parent_module}::{{parent}, Id};{child_import}
+    // The models, imported from the folders of src where they were found (side by side with the relation otherwise)
+    use {parent_path}::{{parent}, Id};{child_import}
     use serde::Deserialize;
     use octopux::{
         HasMany,
@@ -2797,10 +2939,11 @@ const RELATION_TPL: &str = r#"
 
 // Inserts the GraphQL field of the relation in the parent model, or explains how to add it
 // when the parent model is missing or was generated without --graphql
-fn add_relation_field(root: &Path, output: Option<&Path>, relation: &Relation) -> Result<(), Error> {
-    let path = source_path(root, output, &format!("{}.rs", relation.parent_table));
+fn add_relation_field(root: &Path, files: &RelationFiles, relation: &Relation) -> Result<(), Error> {
+    let path = files.parent.display().to_string();
+    let paths = ModulePaths::from_file(root, &files.parent, files);
     let source = fs::read_to_string(root.join(&path)).ok();
-    match source.as_deref().and_then(|source| with_relation_field(source, relation).map(|patched| (source, patched))) {
+    match source.as_deref().and_then(|source| with_relation_field(source, relation, &paths).map(|patched| (source, patched))) {
         Some((source, patched)) if patched == source => {
             println!("{}", success(&format!("The GraphQL field `{}` is already declared in {}", relation.name, path)));
         }
@@ -2813,7 +2956,7 @@ fn add_relation_field(root: &Path, output: Option<&Path>, relation: &Relation) -
                 // blank lines around the field to insert, which starts with a line break
                 "{}\n\n{}\n",
                 warning(&format!("{} has no `#[ComplexObject]` of a model generated with --graphql, add this field to the `#[ComplexObject]` of {}:", path, relation.parent)),
-                relation_graphql_field(relation)
+                relation_graphql_field(relation, &paths)
             );
         }
     }
@@ -3397,12 +3540,17 @@ fn run(opt: Opt) -> Result<(), Error> {
                 }
             }
             write_source(&path, &render_table_model(&name, Some(&table), schema.as_deref(), openapi, graphql, sqlx, timestamps, &fields, dialect))?;
-            println!("{}", success(&format!("Successfully generated model {}, declare it with `mod {};`", path, module)));
+            println!("{}", success(&format!("Successfully generated model {}, {}", path, declaration_hint(&std::env::current_dir()?, &path, &module))));
             if let Some(hint) = extension_hint(&fields, graphql) {
                 println!("{}", hint);
             }
             if graphql {
-                add_graphql_roots(&std::env::current_dir()?, &module, &name)?;
+                // the roots are merged in src/main.rs, at the root of the crate
+                let root = std::env::current_dir()?;
+                let roots_module = crate_module(&root, Path::new(&path))
+                    .and_then(|m| m.strip_prefix("crate::").map(String::from))
+                    .unwrap_or_else(|| module.clone());
+                add_graphql_roots(&root, &roots_module, &name)?;
             }
             if let Some((migration, sql)) = migration {
                 write_migration(&migration, &sql)?;
@@ -3434,18 +3582,21 @@ fn run(opt: Opt) -> Result<(), Error> {
                 process::exit(1);
             }
             let module = relation.module();
-            let path = source_path(&std::env::current_dir()?, output.as_deref(), &format!("{}.rs", module));
+            let root = std::env::current_dir()?;
+            let files = RelationFiles::locate(&root, output.as_deref(), &relation);
+            let path = files.relation.display().to_string();
             refuse_overwrite(&path, force, "relation");
-            write_source(&path, &render_relation(&relation, openapi, graphql, sqlx, timestamps, dialect))?;
+            let paths = ModulePaths::from_file(&root, &files.relation, &files);
+            write_source(&path, &render_relation(&relation, &paths, openapi, graphql, sqlx, timestamps, dialect))?;
             println!(
                 "{}",
                 success(&format!(
-                    "Successfully generated relation {}, declare it with `mod {};` and mount it with `.configure({}::configure)` in the scope of the {} routes",
-                    path, module, module, relation.parent.to_lowercase()
+                    "Successfully generated relation {}, {} and mount it with `.configure({}::configure)` in the scope of the {} routes",
+                    path, declaration_hint(&root, &path, &module), module, relation.parent.to_lowercase()
                 ))
             );
             if graphql {
-                add_relation_field(&std::env::current_dir()?, output.as_deref(), &relation)?;
+                add_relation_field(&root, &files, &relation)?;
             }
             if migration {
                 let (table, column) = relation.foreign_key_column();
@@ -3494,6 +3645,7 @@ mod tests {
         to_snake_case, bootstrap, bootstrap_dependencies, bootstrap_options, BootstrapOptions, render_bootstrap_main, changes_summary, confirm, confirm_save, generated_header, migration_tables, parse_tables, postgres_column_type, url_dialect,
         Cli, Column, Dialect, Field, Opt, Reference, Relation, Table, Through, LOGO,
         add_column_error, read_default, read_model_file, read_new_fields, render_add_columns, with_added_fields, write_source, ModelFile,
+        crate_module, import_path, ModulePaths, RelationFiles,
     };
     use structopt::StructOpt;
 
@@ -4260,7 +4412,7 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn relation_implements_has_many_on_its_own_type() {
-        let rel = render_relation(&relation("Project", "Book", None), false, false, false, false, Dialect::Sqlite);
+        let rel = render_relation(&relation("Project", "Book", None), &ModulePaths::siblings(&relation("Project", "Book", None)), false, false, false, false, Dialect::Sqlite);
         assert!(rel.contains("use super::project::{Project, Id};\n    use super::book::Book;"));
         assert!(rel.contains("pub struct ProjectBooksQuery {\n        /// Number of rows to skip\n        pub offset: Option<usize>,"));
         assert!(rel.contains("pub struct ProjectBooks;"));
@@ -4274,36 +4426,36 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn self_referencing_relation_imports_its_model_once() {
-        let rel = render_relation(&relation("Category", "Category", None), false, false, false, false, Dialect::Sqlite);
+        let rel = render_relation(&relation("Category", "Category", None), &ModulePaths::siblings(&relation("Category", "Category", None)), false, false, false, false, Dialect::Sqlite);
         assert!(rel.contains("use super::category::{Category, Id};\n    use serde::Deserialize;"));
         assert_eq!(rel.matches("use super::category::").count(), 1);
     }
 
     #[test]
     fn openapi_relation_is_documented() {
-        let rel = render_relation(&relation("Project", "Book", None), true, false, false, false, Dialect::Sqlite);
+        let rel = render_relation(&relation("Project", "Book", None), &ModulePaths::siblings(&relation("Project", "Book", None)), true, false, false, false, Dialect::Sqlite);
         assert!(rel.contains("#[derive(Deserialize, JsonSchema, ApiComponent)]\n    pub struct ProjectBooksQuery"));
         assert!(rel.contains("pub fn configure(cfg: &mut apistos::web::ServiceConfig) {\n        gen_documented_relation_endpoint!(ProjectBooks)(cfg)\n    }"));
     }
 
     #[test]
     fn sqlx_relation_pages_the_children_and_looks_up_the_parent() {
-        let rel = render_relation(&relation("Project", "Book", None), false, false, true, false, Dialect::Sqlite);
+        let rel = render_relation(&relation("Project", "Book", None), &ModulePaths::siblings(&relation("Project", "Book", None)), false, false, true, false, Dialect::Sqlite);
         assert!(rel.contains("const DEFAULT_LIMIT: i64 = 20;"));
         assert!(rel.contains("async fn list_related(id: Id, query: &ProjectBooksQuery, state: &AppState)"));
         assert!(rel.contains("let models = sqlx::query_as::<_, Book>(\n                \"SELECT * FROM book WHERE project_id = $1 ORDER BY id LIMIT $2 OFFSET $3\",\n            )\n            .bind(id)\n            .bind(limit)\n            .bind(offset)\n            .fetch_all(&state.pool)"));
         assert!(rel.contains("if models.is_empty() {\n                let parent = sqlx::query_scalar::<_, Id>(\n                    \"SELECT id FROM project WHERE id = $1\","));
         assert!(rel.contains("if parent.is_none() {\n                    return Ok(None);\n                }\n            }\n            Ok(Some(models))"));
-        let mysql = render_relation(&relation("Project", "Book", None), false, false, true, true, Dialect::Mysql);
+        let mysql = render_relation(&relation("Project", "Book", None), &ModulePaths::siblings(&relation("Project", "Book", None)), false, false, true, true, Dialect::Mysql);
         assert!(mysql.contains("\"SELECT * FROM book WHERE project_id = ? AND deleted_at IS NULL ORDER BY id LIMIT ? OFFSET ?\""));
         assert!(mysql.contains("\"SELECT id FROM project WHERE id = ? AND deleted_at IS NULL\""));
     }
 
     #[test]
     fn sqlx_relation_joins_the_through_table() {
-        let rel = render_relation(&relation("Project", "Category", Some("ProjectCategory")), false, false, true, false, Dialect::Postgres);
+        let rel = render_relation(&relation("Project", "Category", Some("ProjectCategory")), &ModulePaths::siblings(&relation("Project", "Category", Some("ProjectCategory"))), false, false, true, false, Dialect::Postgres);
         assert!(rel.contains("\"SELECT category.* FROM category JOIN project_category ON project_category.category_id = category.id WHERE project_category.project_id = $1 ORDER BY category.id LIMIT $2 OFFSET $3\""));
-        let rel = render_relation(&relation("Project", "Category", Some("ProjectCategory")), false, false, true, true, Dialect::Postgres);
+        let rel = render_relation(&relation("Project", "Category", Some("ProjectCategory")), &ModulePaths::siblings(&relation("Project", "Category", Some("ProjectCategory"))), false, false, true, true, Dialect::Postgres);
         assert!(rel.contains("WHERE project_category.project_id = $1 AND category.deleted_at IS NULL AND project_category.deleted_at IS NULL ORDER BY"));
     }
 
@@ -4450,21 +4602,60 @@ CREATE INDEX book_idx ON book (code);
         let parent = super::with_header("//", &render_model("Author", false, true, true, false, &[field("name", "String")], Dialect::Sqlite));
         std::fs::write(root.join("src/author.rs"), &parent).unwrap();
         let rel = relation("Author", "Book", None);
-        super::add_relation_field(&root, None, &rel).unwrap();
+        super::add_relation_field(&root, &super::RelationFiles::locate(&root, None, &rel), &rel).unwrap();
         let patched = std::fs::read_to_string(root.join("src/author.rs")).unwrap();
-        assert_eq!(patched, super::with_relation_field(&parent, &rel).unwrap());
-        super::add_relation_field(&root, None, &rel).unwrap();
+        assert_eq!(patched, super::with_relation_field(&parent, &rel, &ModulePaths::siblings(&rel)).unwrap());
+        super::add_relation_field(&root, &super::RelationFiles::locate(&root, None, &rel), &rel).unwrap();
         assert_eq!(std::fs::read_to_string(root.join("src/author.rs")).unwrap(), patched);
 
         // a parent generated without --graphql is left as it is, the field being printed to add by hand
         let plain = super::with_header("//", &render_model("Author", false, false, true, false, &[field("name", "String")], Dialect::Sqlite));
         std::fs::write(root.join("src/author.rs"), &plain).unwrap();
-        super::add_relation_field(&root, None, &rel).unwrap();
+        super::add_relation_field(&root, &super::RelationFiles::locate(&root, None, &rel), &rel).unwrap();
         assert_eq!(std::fs::read_to_string(root.join("src/author.rs")).unwrap(), plain);
         // as is a missing parent
         std::fs::remove_file(root.join("src/author.rs")).unwrap();
-        super::add_relation_field(&root, None, &rel).unwrap();
+        super::add_relation_field(&root, &super::RelationFiles::locate(&root, None, &rel), &rel).unwrap();
         assert!(!root.join("src/author.rs").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn modules_follow_the_folders_of_src() {
+        let root = std::path::Path::new("/project");
+        let module = |path: &str| crate_module(root, std::path::Path::new(path));
+        assert_eq!(module("src/author.rs").as_deref(), Some("crate::author"));
+        assert_eq!(module("./src/models/../models/author.rs").as_deref(), Some("crate::models::author"));
+        assert_eq!(module("/project/src/models/author/mod.rs").as_deref(), Some("crate::models::author"));
+        assert_eq!(module("src/main.rs").as_deref(), Some("crate"));
+        assert_eq!(module("out/author.rs"), None);
+        let import = |from: &str, target: &str| import_path(root, std::path::Path::new(from), std::path::Path::new(target));
+        assert_eq!(import("src/models/book.rs", "src/models/author.rs"), "super::author");
+        assert_eq!(import("src/relations/author_books.rs", "src/models/author.rs"), "crate::models::author");
+        assert_eq!(import("src/models/author.rs", "src/author_books.rs"), "crate::author_books");
+        assert_eq!(import("out/author_books.rs", "out/author.rs"), "super::author");
+    }
+
+    #[test]
+    fn relation_imports_the_models_where_they_are() {
+        let root = std::env::temp_dir().join(format!("octopux-relation-folders-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src/models/book")).unwrap();
+        let parent = super::with_header("//", &render_model("Author", false, true, true, false, &[field("name", "String")], Dialect::Sqlite));
+        std::fs::write(root.join("src/models/author.rs"), &parent).unwrap();
+        std::fs::write(root.join("src/models/book/mod.rs"), render_model("Book", false, false, false, false, &[], Dialect::Sqlite)).unwrap();
+        let rel = relation("Author", "Book", None);
+        let files = RelationFiles::locate(&root, Some(std::path::Path::new("src/relations")), &rel);
+        assert_eq!(files.parent, std::path::Path::new("src/models/author.rs"));
+        assert_eq!(files.child, std::path::Path::new("src/models/book/mod.rs"));
+
+        let paths = ModulePaths::from_file(&root, &files.relation, &files);
+        let rendered = render_relation(&rel, &paths, false, true, false, false, Dialect::Sqlite);
+        assert!(rendered.contains("use crate::models::author::{Author, Id};\n    use crate::models::book::Book;"));
+
+        super::add_relation_field(&root, &files, &rel).unwrap();
+        let patched = std::fs::read_to_string(root.join("src/models/author.rs")).unwrap();
+        assert!(patched.contains("async_graphql::Result<Vec<super::book::Book>> {\n            crate::relations::author_books::resolve("));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -4556,28 +4747,28 @@ CREATE INDEX book_idx ON book (code);
 
     #[test]
     fn graphql_relation_resolves_the_children_of_the_parent() {
-        let rel = render_relation(&relation("Project", "Book", None), false, true, true, false, Dialect::Sqlite);
+        let rel = render_relation(&relation("Project", "Book", None), &ModulePaths::siblings(&relation("Project", "Book", None)), false, true, true, false, Dialect::Sqlite);
         assert!(rel.contains("pub async fn resolve(ctx: &async_graphql::Context<'_>, id: Id, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<Book>> {"));
         assert!(rel.contains("ProjectBooks::list_related(id, &ProjectBooksQuery { offset, limit }, state.get_ref()).await?;"));
-        assert!(!render_relation(&relation("Project", "Book", None), false, false, true, false, Dialect::Sqlite).contains("async_graphql"));
+        assert!(!render_relation(&relation("Project", "Book", None), &ModulePaths::siblings(&relation("Project", "Book", None)), false, false, true, false, Dialect::Sqlite).contains("async_graphql"));
     }
 
     #[test]
     fn relation_field_is_inserted_once_in_the_complex_object_of_the_parent() {
         let parent = render_model("Project", false, true, true, false, &[field("name", "String")], Dialect::Sqlite);
         let rel = relation("Project", "Book", None);
-        let patched = super::with_relation_field(&parent, &rel).unwrap();
+        let patched = super::with_relation_field(&parent, &rel, &ModulePaths::siblings(&rel)).unwrap();
         assert!(patched.contains(&format!(
             "{}\n        /// The books of the project, paginated\n        async fn books(&self, ctx: &Context<'_>, offset: Option<usize>, limit: Option<usize>) -> async_graphql::Result<Vec<super::book::Book>> {{\n            super::project_books::resolve(ctx, self.id, offset, limit).await\n        }}\n    }}",
             super::GRAPHQL_RELATIONS_MARKER
         )));
-        assert_eq!(super::with_relation_field(&patched, &rel).unwrap(), patched);
+        assert_eq!(super::with_relation_field(&patched, &rel, &ModulePaths::siblings(&rel)).unwrap(), patched);
         // a second relation goes next to the first one
-        let categories = super::with_relation_field(&patched, &relation("Project", "Category", Some("ProjectCategory"))).unwrap();
+        let categories = super::with_relation_field(&patched, &relation("Project", "Category", Some("ProjectCategory")), &ModulePaths::siblings(&relation("Project", "Category", Some("ProjectCategory")))).unwrap();
         assert!(categories.contains("super::project_books::resolve(") && categories.contains("super::project_categories::resolve("));
         // a model generated without --graphql has no complex object
         let plain = render_model("Project", false, false, true, false, &[field("name", "String")], Dialect::Sqlite);
-        assert!(super::with_relation_field(&plain, &rel).is_none());
+        assert!(super::with_relation_field(&plain, &rel, &ModulePaths::siblings(&rel)).is_none());
     }
 
     #[test]
@@ -4696,7 +4887,7 @@ CREATE INDEX book_idx ON book (code);
             Some("categories".into()),
             Some("project_category".into()),
         );
-        let body = render_relation(&relation, false, false, true, false, Dialect::Sqlite);
+        let body = render_relation(&relation, &ModulePaths::siblings(&relation), false, false, true, false, Dialect::Sqlite);
         assert!(body.contains("SELECT categories.* FROM categories JOIN project_category ON project_category.category_id = categories.id WHERE project_category.project_id = $1"));
         assert!(body.contains("SELECT id FROM projects WHERE id = $1"));
         // the modules are named after the tables
@@ -4723,7 +4914,7 @@ CREATE INDEX book_idx ON book (code);
         assert!(columns.contains("ALTER TABLE app.book ADD COLUMN title VARCHAR(255) NOT NULL;\n"), "{}", columns);
         assert!(columns.contains("ALTER TABLE app.book ADD CONSTRAINT fk_book_author_id FOREIGN KEY (author_id) REFERENCES app.author (id);\n"), "{}", columns);
         let relation = Relation::new("Project".into(), "Category".into(), None, None, Some("ProjectCategory".into()), None).with_schema(Some("app".into()));
-        let body = render_relation(&relation, false, false, true, false, Dialect::Postgres);
+        let body = render_relation(&relation, &ModulePaths::siblings(&relation), false, false, true, false, Dialect::Postgres);
         assert!(body.contains("SELECT app.category.* FROM app.category JOIN app.project_category ON app.project_category.category_id = app.category.id WHERE app.project_category.project_id = $1"), "{}", body);
         assert!(body.contains("SELECT id FROM app.project WHERE id = $1"));
         assert!(body.contains("use super::project::{Project, Id};\n    use super::category::Category;"));
