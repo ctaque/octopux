@@ -165,8 +165,8 @@ const NEAREST_TPL: &str = r#"
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let offset = query.offset.unwrap_or(0) as i64;
-            let limit = query.limit.map_or(DEFAULT_LIMIT, |limit| (limit as i64).min(MAX_LIMIT));
+            let offset = i64::try_from(query.offset.unwrap_or(0)).unwrap_or(i64::MAX);
+            let limit = query.limit.map_or(DEFAULT_LIMIT, |limit| i64::try_from(limit).unwrap_or(i64::MAX).min(MAX_LIMIT));
             // the vector bound first, as $1: the {children} without `{child_column}` are near to nothing{exclusion}.
             // `min_similarity` filters before the pagination, so that the pages stay full
             let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT *, 1 - ({child_column} <=> ");
