@@ -70,8 +70,8 @@
         const RELATION: &'static str = "products";
 
         async fn list_related(id: Id, query: &TagProductsQuery, state: &AppState) -> Result<Option<Vec<Product>>> {
-            let offset = query.offset.unwrap_or(0) as i64;
-            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| (l as i64).min(MAX_LIMIT));
+            let offset = i64::try_from(query.offset.unwrap_or(0)).unwrap_or(i64::MAX);
+            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| i64::try_from(l).unwrap_or(i64::MAX).min(MAX_LIMIT));
             let models = sqlx::query_as::<_, Product>(
                 "SELECT product.* FROM product JOIN producttag ON producttag.product_id = product.id WHERE producttag.tag_id = $1 ORDER BY product.id LIMIT $2 OFFSET $3",
             )

@@ -1,5 +1,11 @@
 use std::{collections::HashSet, sync::Arc};
-use actix_web::{http::header::AUTHORIZATION, HttpRequest};
+use actix_web::{
+    body::{BoxBody, MessageBody},
+    dev::{ServiceRequest, ServiceResponse},
+    http::header::AUTHORIZATION,
+    middleware::Next,
+    web, HttpMessage, HttpRequest, HttpResponse,
+};
 use async_graphql::{
     extensions::{Extension, ExtensionContext, ExtensionFactory, NextResolve, ResolveInfo},
     ServerError, ServerResult, Value,
@@ -42,6 +48,23 @@ impl JwtKey {
     }
 }
 
+// Refuses the REST routes it wraps to the requests without a valid token (401), the user of the
+// token being put in the extensions of the request. Without a `JwtKey` in the app data, every request is refused.
+pub async fn require_token(req: ServiceRequest, next: Next<impl MessageBody + 'static>) -> Result<ServiceResponse<BoxBody>, actix_web::Error> {
+    let user = req.app_data::<web::Data<JwtKey>>().and_then(|key| key.authenticate(req.request()));
+    match user {
+        Some(user) => {
+            req.extensions_mut().insert(user);
+            Ok(next.call(req).await?.map_into_boxed_body())
+        }
+        None => Ok(req.into_response(
+            HttpResponse::Unauthorized()
+                .content_type("application/json")
+                .body(r#"{"code":"UNAUTHORIZED","message":"a valid bearer token is required"}"#),
+        )),
+    }
+}
+
 
 // Refuses the root fields of the schema to anonymous requests, except the public ones
 pub struct RequireAuth {
@@ -72,7 +95,8 @@ impl Extension for RequireAuthExt {
         info: ResolveInfo<'_>,
         next: NextResolve<'_>,
     ) -> ServerResult<Option<Value>> {
-        // Only the root fields are guarded, the nested ones being reachable through them only
+        // Only the root fields are guarded, the nested ones being reachable through them only.
+        // `__schema` and `__type` are root fields like the others, public only when listed
         let is_root = info.path_node.parent.is_none();
 
         if is_root

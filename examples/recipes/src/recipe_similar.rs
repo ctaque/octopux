@@ -51,7 +51,7 @@ impl HasMany for RecipeSimilar {
     const RELATION: &'static str = "similar";
 
     async fn list_related(id: Id, query: &RecipeSimilarQuery, state: &AppState) -> Result<Option<Vec<SimilarRecipe>>> {
-        let limit = query.limit.map_or(DEFAULT_LIMIT, |l| (l as i64).min(MAX_LIMIT));
+        let limit = query.limit.map_or(DEFAULT_LIMIT, |l| i64::try_from(l).unwrap_or(i64::MAX).min(MAX_LIMIT));
         // The embedding and the cuisine of the recipe, `None` when it does not exist
         let Some((embedding, cuisine)) = sqlx::query_as::<_, (Vector, String)>(
             "SELECT embedding, cuisine FROM recipe WHERE id = $1 AND deleted_at IS NULL AND embedding IS NOT NULL",
