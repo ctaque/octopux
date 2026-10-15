@@ -70,8 +70,8 @@
         const RELATION: &'static str = "creditnotes";
 
         async fn list_related(id: Id, query: &InvoiceCreditnotesQuery, state: &AppState) -> Result<Option<Vec<Creditnote>>> {
-            let offset = query.offset.unwrap_or(0) as i64;
-            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| (l as i64).min(MAX_LIMIT));
+            let offset = i64::try_from(query.offset.unwrap_or(0)).unwrap_or(i64::MAX);
+            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| i64::try_from(l).unwrap_or(i64::MAX).min(MAX_LIMIT));
             let models = sqlx::query_as::<_, Creditnote>(
                 "SELECT * FROM creditnote WHERE invoice_id = $1 ORDER BY id LIMIT $2 OFFSET $3",
             )

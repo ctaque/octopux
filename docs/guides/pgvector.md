@@ -6,19 +6,19 @@ nav_order: 8
 
 # pgvector
 
-Enable the feature, with `postgres` in the features of sqlx:
-
 ```bash
-cargo add octopux --features sqlx,pgvector         # add graphql for the GraphQL scalars
+cargo add octopux --features sqlx,pgvector         # sqlx with `postgres`; add graphql for the GraphQL scalars
 ```
+
+The `vector`, `halfvec` and `sparsevec` columns of [pgvector](https://github.com/pgvector/pgvector) become the `Vector`, `HalfVector` and `SparseVector` fields of the sqlx models.
+
+The vectors stay on the backend: clients send text and receive rows. The backend embeds the text before a save or a search.
 
 ## Vector fields
 
-With the `pgvector` feature, the `vector`, `halfvec` and `sparsevec` columns of [pgvector](https://github.com/pgvector/pgvector) are fields of the sqlx models, read and written in the binary format of pgvector and sent to and received from the client as JSON:
+The model sent to the clients leaves the vector out:
 
 ```rust
-use octopux::pgvector::{self, Vector};
-
 #[derive(Serialize, Deserialize, sqlx::FromRow, HttpFindListDelete, SqlxModel)]
 #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
 #[sqlx_model(database = "postgres", filter)]
@@ -26,103 +26,128 @@ use octopux::pgvector::{self, Vector};
 pub struct Article {
     pub id: Id,
     pub title: String,
-    pub embedding: Vector,                          // vector(1536) NOT NULL
-    pub small: Option<pgvector::HalfVector>,        // halfvec(3072)
-    pub keywords: Option<pgvector::SparseVector>,   // sparsevec(30522)
+    pub body: String,
+    // no `embedding`: the vector(384) column is never sent
 }
 ```
 
-```json
-{ "id": 1, "title": "Ramen in Tokyo", "embedding": [0.7, 0.0, 0.05, 0.7], "small": null, "keywords": { "dimensions": 8, "indices": [4, 6], "values": [1.0, 0.5] } }
-```
+The insert and update models hold it, skipped from the payload, and `before_save` computes it:
 
-`Vector` and `HalfVector` are arrays of numbers (`Deref` to `Vec<f32>`); a `HalfVector` is rounded to half precision in the database, which halves the column and its index. A `SparseVector` is its dimensions and its non-zero values with their indices, from 0. In a query string, they are the literals of pgvector: `[0.7,0,0.05,0.7]` (or `0.7,0,0.05,0.7`), and `{5:1,7:0.5}/8` with the indices from 1. A vector with no dimension, a value that is not finite, or a vector of another size than its column (`vector(1536)`) answers 400 `BAD_REQUEST`.
+```rust
+use octopux::pgvector::Vector;
+
+#[derive(Serialize, Deserialize, InputObject, HttpCreate, SqlxNewModel)]
+#[http_create(SaveQuery, AppState)]
+#[sqlx_model(database = "postgres", model = "Article", before_save)]
+pub struct NewArticle {
+    pub title: String,
+    pub body: String,
+    #[serde(skip)]
+    #[graphql(skip)]
+    pub embedding: Option<Vector>,
+}
+
+#[async_trait]
+impl BeforeSave<AppState> for NewArticle {
+    async fn before_save(mut self: Self, state: &AppState) -> Result<Self> {
+        self.embedding = state.embedder.embed(vec![format!("{}\n{}", self.title, self.body)]).await?.pop();
+        Ok(self)
+    }
+}
+```
 
 ## Similarity search
 
-[`SqlxFilter`]({{ '/guides/filtering-and-sorting/' | relative_url }}) orders a list by the distance of a column to the vector of the query, nearest first, with `op = "nearest"`; `limit` keeps the `k` nearest rows:
+A [`SqlxFilter`]({{ '/guides/filtering-and-sorting/' | relative_url }}) field with `op = "nearest"` orders the list by distance, nearest first; `limit` keeps the `k` nearest rows. Skip it from the query string so that only the backend sets it:
 
 ```rust
-#[derive(Deserialize, SqlxFilter)]
+#[derive(Default, Deserialize, JsonSchema, ApiComponent, SqlxFilter)]
 #[sqlx_filter(database = "postgres")]
 pub struct ListQuery {
-    pub offset: Option<usize>,
     pub limit: Option<usize>,
     pub category: Option<String>,
     #[sqlx_filter(column = "embedding", op = "nearest")]
-    pub near: Option<pgvector::Vector>,           // ?near=[0.8,0,0,0.6]&limit=5
-    #[sqlx_filter(column = "keywords", op = "nearest", distance = "inner_product")]
-    pub keywords: Option<pgvector::SparseVector>, // ?keywords={5:1,6:1}/8
-    #[sqlx_filter(sort = "title")]
-    pub sort: Option<String>,                     // orders the rows at the same distance
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub near: Option<pgvector::Vector>,
 }
 ```
 
+The search embeds the text and lists the rows:
+
+```rust
+pub async fn search_articles(query: SearchQuery, state: &AppState) -> anyhow::Result<Vec<Article>> {
+    let near = Some(state.embedder.embed_query(&query.q).await?);
+    let list = ListQuery { limit: query.limit, category: query.category, near };
+    Ok(Article::list(&list, state).await?)
+}
+```
+
+Mount `/article/search` before the routes of the model, so that `search` is not taken for an `{id}`. The other filters still apply.
+
 | `distance` | Order | HNSW operator class |
 | --- | --- | --- |
-| `cosine` (default) | `column <=> value` | `vector_cosine_ops` |
-| `l2` | `column <-> value` | `vector_l2_ops` |
-| `inner_product` | `column <#> value`, the largest inner product first | `vector_ip_ops` |
-| `l1` | `column <+> value` | `vector_l1_ops` |
+| `cosine` (default) | `<=>` | `vector_cosine_ops` |
+| `l2` | `<->` | `vector_l2_ops` |
+| `inner_product` | `<#>`, largest first | `vector_ip_ops` |
+| `l1` | `<+>` | `vector_l1_ops` |
 
-The conditions of the other fields still apply, and the distance orders the rows before the columns of the `sort` field. Index the column with HNSW and the operator class of the distance (`halfvec_cosine_ops`, `sparsevec_cosine_ops`... for the other types), up to 2000 dimensions for a `vector`, 4000 for a `halfvec`:
+Index the column with the operator class of the distance (`halfvec_*_ops`, `sparsevec_*_ops` for the other types):
 
 ```sql
 CREATE INDEX article_embedding_idx ON article USING hnsw (embedding vector_cosine_ops);
 ```
 
+## Similar rows
+
+The rows similar to a row reuse its stored vector, nothing is embedded: a [`HasMany`]({{ '/guides/relations/' | relative_url }}) relation reads it, then orders the other rows by distance.
+
+```sql
+SELECT id, title, 1 - (embedding <=> $2) AS similarity FROM article
+WHERE id <> $1 ORDER BY embedding <=> $2 LIMIT $3
+```
+
 ## GraphQL and OpenAPI
 
-With the `graphql` feature too, the vectors are the async-graphql scalars `Vector`, `HalfVector` and `SparseVector`, the same JSON or the literal of pgvector. With `openapi`, they are documented as arrays and objects.
-
-The models derive `SimpleObject` and `InputObject` with their vector fields, and a resolver takes a vector as argument, here to order the list as `ListQuery`:
-
-```rust
-#[Object]
-impl ArticleQuery {
-    async fn articles(&self, ctx: &Context<'_>, category: Option<String>, near: Option<Vector>, keywords: Option<SparseVector>, limit: Option<usize>) -> async_graphql::Result<Vec<Article>> {
-        let query = ListQuery { limit, category, near, keywords, ..ListQuery::default() };
-        Ok(Article::list(&query, app_state(ctx)?).await?)
-    }
-}
-
-#[Object]
-impl ArticleMutation {
-    async fn create_article(&self, ctx: &Context<'_>, input: NewArticle) -> async_graphql::Result<Article> {
-        Ok(input.save(&SaveQuery {}, app_state(ctx)?).await?)
-    }
-}
-```
-
-The vectors are written as lists of numbers in the query or in the variables, the sparse vectors as objects (indices from 0) or as the literal of pgvector (indices from 1):
+With `graphql` and `openapi`, the vector types are scalars and documented schemas. Keep them out of the API anyway: resolvers take text, inputs skip the vector with `#[graphql(skip)]`.
 
 ```graphql
-query Near($near: Vector!) {
-  articles(near: $near, limit: 2) { id title embedding }
-}
-
-{ articles(keywords: "{5:1,6:1}/8", limit: 3) { title keywords } }
-
-mutation {
-  createArticle(input: {
-    title: "Pasta al pesto"
-    category: "cooking"
-    embedding: [0.95, 0, 0, 0.05]
-    keywords: { dimensions: 8, indices: [0, 6], values: [1, 1] }
-  }) { id embedding keywords }
-}
+{ searchArticles(q: "ramen in tokyo", limit: 2) { id title } }
+mutation { createArticle(input: { title: "Pasta al pesto", body: "Basil, pine nuts..." }) { id } }
 ```
-
-```json
-{ "near": [0, 1, 0, 0.2] }
-```
-
-```json
-{"data":{"articles":[{"id":6,"title":"The World Cup final","embedding":[0.0,1.0,0.1,0.1]},{"id":3,"title":"Trail running in the Alps","embedding":[0.0,0.9,0.05,0.5]}]}}
-```
-
-An invalid vector is a GraphQL error: ``Failed to parse "Vector": invalid vector `[1,x]`, use [1.5,-2,0.3]``.
 
 ## CLI and reverse engineering
 
-The CLI proposes the vectors in the field types with `--postgres` (`embedding:pgvector::Vector`) and asks their dimensions: the migration creates the `vector` extension, `vector(1536)` columns and their HNSW indexes for the cosine distance. [`octopux-reverse`]({{ '/reverse-engineering/' | relative_url }}) maps the `vector`, `halfvec` and `sparsevec` columns to these types. See the [`pgvector`](https://github.com/ctaque/octopux/tree/main/examples/pgvector) example.
+With `--postgres`, the CLI offers `pgvector::Vector` field types: the migration creates the extension, the `vector(n)` column and its HNSW cosine index. [`octopux-reverse`]({{ '/reverse-engineering/' | relative_url }}) maps the pgvector columns to these types; hide the fields as above.
+
+### Semantic search generated by the CLI
+
+With `--sqlx --postgres`, `generate-model` and `add-field` offer to compute a `pgvector::Vector` field from the text of the model with [fastembed](https://github.com/Anush008/fastembed-rs), locally on the CPU:
+
+```
+? `embedding` is a vector: compute it from the text of the model with fastembed, and search the model by meaning? (y/N) y
+? Embedding model › [MultilingualE5Small]
+? Fields `embedding` is computed from › [title, summary]
+```
+
+| Model | Dimensions | |
+| --- | --- | --- |
+| `MultilingualE5Small` | 384 | multilingual |
+| `MultilingualE5Base` | 768 | multilingual, more precise, slower |
+| `BGESmallENV15` | 384 | English |
+| `BGEBaseENV15` | 768 | English, more precise, slower |
+| `AllMiniLML6V2` | 384 | English, fastest |
+
+The CLI writes:
+
+- `src/embedder.rs`: the fastembed model, shared by all the searches. Your code depends on fastembed, octopux does not: edit it freely.
+- `<table>_search.rs`: the `BeforeSave` implementations, `GET /<model>/search?q=...`, the `search<Models>` GraphQL query, and `embed_missing` for the rows saved before.
+- with `--bootstrap`, the embedder in `AppState`.
+
+It then offers `GET /<model>/{id}/similar`, see [`generate-relation --nearest`]({{ '/cli/generate-relation/' | relative_url }}#nearest-neighbour).
+
+Mount the search first: `.configure(book_search::configure).configure(book::configure)`. The model is downloaded on the first run into `.fastembed_cache`.
+
+The search always answers the nearest rows, even unrelated ones: filter on `similarity`. Its scale depends on the model (unrelated rows stay below ~0.8 with E5, ~0.55 with BGE, ~0.3 with AllMiniLML6V2); check a few searches on your data. A vector computed from more text separates better than a title alone.
+
+See the [`recipes`](https://github.com/ctaque/octopux/tree/main/examples/recipes) example: a semantic search over 340 recipes.

@@ -38,7 +38,7 @@ mod author;
 mod author_books;
 mod book;
 mod helpers;
-use actix_web::web;
+use actix_web::{middleware::from_fn, web};
 use helpers::AppState;
 use octopux::anyhow;
 use async_graphql::http::GraphiQLSource;
@@ -46,7 +46,7 @@ use async_graphql::{EmptySubscription, MergedObject, Object, Schema};
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse};
 use sqlx::SqlitePool;
 mod book_book_pages;
-use auth_extension::{JwtKey, RequireAuth};
+use auth_extension::{require_token, JwtKey, RequireAuth};
 
 // The version of the API, so that the query root has a field before the first model is merged
 #[derive(Default)]
@@ -86,6 +86,46 @@ async fn graphiql() -> actix_web::HttpResponse {
         .body(GraphiQLSource::build().endpoint("/graphql").finish())
 }
 
+// The schema, `RequireAuth` refusing its private root fields to anonymous requests. The introspection,
+// which GraphiQL reads the documentation from, is disabled unless `introspection` is set, which also
+// makes it public so that GraphiQL needs no token
+fn schema(state: web::Data<AppState>, introspection: bool) -> AppSchema {
+    let mut public = vec![
+        ("Query", "apiVersion"), // allow route Query "apiVersion" to bypass authentication
+        ("Mutation", "login"), // same for login Mutation
+        ("Mutation", "register"), // same for register Mutation
+    ];
+    if introspection {
+        public.extend([("Query", "__schema"), ("Query", "__type")]);
+    }
+    let builder = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+        .extension(RequireAuth::new(&public))
+        // The resolvers of the models read the state from the data of the schema
+        .data(state);
+    if introspection { builder } else { builder.disable_introspection() }.finish()
+}
+
+// The routes, the REST ones requiring a token as the private fields of the schema do
+fn configure(cfg: &mut web::ServiceConfig) {
+    // Actix does not fall through between scopes sharing a prefix,
+    // so resources living under the same scope must be registered together
+    cfg.service(
+        web::scope("v1") // Where the magic operates
+            .wrap(from_fn(require_token))
+            .configure(author::configure)
+            .configure(author_books::configure)
+            .configure(book::configure)
+            .configure(page::configure)
+            .configure(book_book_pages::configure),
+    )
+    // GraphQL queries on POST /graphql, GraphiQL on GET /graphql
+    .service(
+        web::resource("/graphql")
+            .route(web::post().to(graphql))
+            .route(web::get().to(graphiql)),
+    );
+}
+
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
     // The SQLite database is a file created next to the crate, migrated on launch
@@ -96,44 +136,16 @@ async fn main() -> anyhow::Result<()> {
     // The secret signing the tokens (HS256)
     let jwt_secret = std::env::var("JWT_SECRET").map_err(|_| anyhow::anyhow!("JWT_SECRET must be set"))?;
     let jwt_key = web::Data::new(JwtKey::from_secret(jwt_secret.as_bytes()));
-    let is_prod = std::env::var("ENVIRONMENT").expect("ENVIRONMENT must be set") == "production";
-    let schema_query = match is_prod {
-        true => "", //disables schema fetch from graphiql in production mode
-        false => "__schema" // enables schema fetch from graphiql in developement mode
-    };
-    // The resolvers of the models read the state from the data of the schema
-    let schema = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
-        .extension(RequireAuth::new(&[
-           ("Query", "apiVersion"), // allow route Query "apiVersion" to bypass authentication
-            ("Query", schema_query), // same for __schema field for geaphiql
-            ("Mutation", "login"), //sme for login Mutation
-            ("Mutation", "register"), // same for register Mutation
-        ]))
-        .data(state.clone())
-        .finish();
-    let schema = web::Data::new(schema);
+    // The introspection is only enabled with ENVIRONMENT=development, any other value or none disabling it
+    let development = std::env::var("ENVIRONMENT").as_deref() == Ok("development");
+    let schema = web::Data::new(schema(state.clone(), development));
 
     actix_web::HttpServer::new(move || {
         actix_web::App::new()
-            // Actix does not fall through between scopes sharing a prefix,
-            // so resources living under the same scope must be registered together
-            .service(
-                web::scope("v1") // Where the magic operates
-                    .configure(author::configure)
-                    .configure(author_books::configure)
-                    .configure(book::configure)
-                    .configure(page::configure)
-                    .configure(book_book_pages::configure),
-            )
+            .configure(configure)
             .app_data(state.clone())
             .app_data(schema.clone())
             .app_data(jwt_key.clone())
-            // GraphQL queries on POST /graphql, GraphiQL on GET /graphql
-            .service(
-                web::resource("/graphql")
-                    .route(web::post().to(graphql))
-                    .route(web::get().to(graphiql)),
-            )
     })
     .bind(("127.0.0.1", 8085))?
     .run()
@@ -146,10 +158,11 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::test;
-    use async_graphql_actix_web::GraphQL;
+    use actix_web::{http::header::AUTHORIZATION, http::StatusCode, test};
     use serde_json::{json, Value};
     use sqlx::SqlitePool;
+
+    const SECRET: &[u8] = b"test secret";
 
     // `#[sqlx::test]` runs the test on a plain tokio runtime, the actix test service spawns its tasks on a LocalSet
     async fn local<F: std::future::Future>(f: F) -> F::Output {
@@ -157,34 +170,98 @@ mod tests {
     }
 
     // `#[sqlx::test]` creates a migrated SQLite database per test, dropped afterwards
-    async fn app(pool: SqlitePool) -> impl actix_web::dev::Service<actix_http::Request, Response = actix_web::dev::ServiceResponse, Error = actix_web::Error> {
+    async fn app_with(pool: SqlitePool, introspection: bool) -> impl actix_web::dev::Service<actix_http::Request, Response = actix_web::dev::ServiceResponse, Error = actix_web::Error> {
         let state = web::Data::new(AppState { pool });
-        let schema = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
-            .data(state.clone())
-            .finish();
         test::init_service(
             actix_web::App::new()
-                .service(
-                    web::scope("v1")
-                        .configure(author::configure)
-                        .configure(author_books::configure)
-                        .configure(book::configure)
-                        .configure(page::configure)
-                        .configure(book_book_pages::configure),
-                )
-                .app_data(state.clone())
-                .service(
-                    web::resource("/graphql")
-                        .route(web::post().to(GraphQL::new(schema.clone())))
-                        .route(web::get().to(graphiql)),
-                ),
+                .configure(configure)
+                .app_data(web::Data::new(schema(state.clone(), introspection)))
+                .app_data(web::Data::new(JwtKey::from_secret(SECRET)))
+                .app_data(state),
         )
         .await
     }
 
+    async fn app(pool: SqlitePool) -> impl actix_web::dev::Service<actix_http::Request, Response = actix_web::dev::ServiceResponse, Error = actix_web::Error> {
+        app_with(pool, false).await
+    }
+
+    // A token of the user 1, valid for an hour
+    fn token() -> String {
+        let claims = json!({ "sub": "1", "role": "user", "exp": chrono::Utc::now().timestamp() + 3600 });
+        jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &jsonwebtoken::EncodingKey::from_secret(SECRET)).unwrap()
+    }
+
+    fn bearer() -> (actix_web::http::header::HeaderName, String) {
+        (AUTHORIZATION, format!("Bearer {}", token()))
+    }
+
+    // The query sent with the token of the user, or anonymously
+    async fn send(app: &impl actix_web::dev::Service<actix_http::Request, Response = actix_web::dev::ServiceResponse, Error = actix_web::Error>, query: &str, authenticated: bool) -> Value {
+        let mut req = test::TestRequest::post().uri("/graphql").set_json(json!({ "query": query }));
+        if authenticated {
+            req = req.insert_header(bearer());
+        }
+        test::call_and_read_body_json(app, req.to_request()).await
+    }
+
     async fn graphql(app: &impl actix_web::dev::Service<actix_http::Request, Response = actix_web::dev::ServiceResponse, Error = actix_web::Error>, query: &str) -> Value {
-        let req = test::TestRequest::post().uri("/graphql").set_json(json!({ "query": query })).to_request();
-        test::call_and_read_body_json(app, req).await
+        send(app, query, true).await
+    }
+
+    #[sqlx::test]
+    async fn anonymous_requests_only_reach_the_public_fields(pool: SqlitePool) {
+        local(async move {
+            let app = app(pool).await;
+            assert_eq!(send(&app, "{ apiVersion }", false).await, json!({ "data": { "apiVersion": "0.0.0" } }));
+            let res = send(&app, "{ authors { id } }", false).await;
+            assert_eq!(res["errors"][0]["message"], "Unauthorized", "{}", res);
+            let res = send(&app, r#"mutation { createAuthor(input: { name: "Ursula" }) { id } }"#, false).await;
+            assert_eq!(res["errors"][0]["message"], "Unauthorized", "{}", res);
+        })
+        .await
+    }
+
+    #[sqlx::test]
+    async fn the_rest_routes_require_a_valid_token(pool: SqlitePool) {
+        local(async move {
+            let app = app(pool).await;
+            let anonymous = [
+                test::TestRequest::get().uri("/v1/author"),
+                test::TestRequest::get().uri("/v1/author/1"),
+                test::TestRequest::get().uri("/v1/author/1/books"),
+                test::TestRequest::post().uri("/v1/author").set_json(json!({ "name": "Ursula" })),
+                test::TestRequest::delete().uri("/v1/author/1"),
+                test::TestRequest::get().uri("/v1/author").insert_header((AUTHORIZATION, "Bearer not-a-token")),
+            ];
+            for req in anonymous {
+                let res = test::call_service(&app, req.to_request()).await;
+                assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+            }
+            let req = test::TestRequest::post().uri("/v1/author").insert_header(bearer()).set_json(json!({ "name": "Ursula" }));
+            assert_eq!(test::call_service(&app, req.to_request()).await.status(), StatusCode::OK);
+            let req = test::TestRequest::get().uri("/v1/author").insert_header(bearer());
+            let authors: Value = test::call_and_read_body_json(&app, req.to_request()).await;
+            assert_eq!(authors, json!([{ "id": 1, "name": "Ursula" }]));
+        })
+        .await
+    }
+
+    #[sqlx::test]
+    async fn the_introspection_is_only_enabled_in_development(pool: SqlitePool) {
+        local(async move {
+            let query = "{ __schema { queryType { name } } }";
+            let production = app_with(pool.clone(), false).await;
+            // a disabled introspection is a private field like the others, resolving to null with a token
+            let res = send(&production, query, false).await;
+            assert_eq!(res["errors"][0]["message"], "Unauthorized", "{}", res);
+            assert_eq!(send(&production, query, true).await, json!({ "data": { "__schema": null } }));
+            let development = app_with(pool, true).await;
+            assert_eq!(send(&development, query, false).await, json!({ "data": { "__schema": { "queryType": { "name": "Query" } } } }));
+            let res = send(&development, r#"{ __type(name: "Query") { name } }"#, false).await;
+            assert_eq!(res, json!({ "data": { "__type": { "name": "Query" } } }));
+        })
+        .await
     }
 
     #[sqlx::test]
@@ -264,7 +341,7 @@ mod tests {
             );
 
             // the REST routes are still served next to the schema, on the same state
-            let req = test::TestRequest::get().uri("/v1/author/1/books").to_request();
+            let req = test::TestRequest::get().uri("/v1/author/1/books").insert_header(bearer()).to_request();
             let books: Value = test::call_and_read_body_json(&app, req).await;
             assert_eq!(books.as_array().unwrap().len(), 3);
         })

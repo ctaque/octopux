@@ -65,8 +65,8 @@
             Ok(Box::new(model))
         }
         async fn list(query: &ListQuery, state: &AppState) -> Result<ListResult> {
-            let offset = query.offset.unwrap_or(0) as i64;
-            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| (l as i64).min(MAX_LIMIT));
+            let offset = i64::try_from(query.offset.unwrap_or(0)).unwrap_or(i64::MAX);
+            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| i64::try_from(l).unwrap_or(i64::MAX).min(MAX_LIMIT));
             let models = sqlx::query_as::<_, BookPage>(
                 "SELECT * FROM bookpage WHERE deleted_at IS NULL ORDER BY id LIMIT $1 OFFSET $2",
             )

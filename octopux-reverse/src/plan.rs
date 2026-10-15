@@ -210,7 +210,8 @@ pub struct Through {
     pub child_key: String,
 }
 
-// A has-many relation of `parent`: the rows of `child` whose `foreign_key` references it, directly or through a join table
+// A has-many relation of `parent`: the rows of `child` whose `foreign_key` references it, directly or through a join table,
+// or with `nearest`, the rows of `child` nearest to `parent` by that vector column
 #[derive(Debug, PartialEq)]
 pub struct Relation {
     pub parent: String,
@@ -222,6 +223,8 @@ pub struct Relation {
     pub through: Option<Through>,
     // every table of the relation has a `deleted_at` column, the soft deleted rows are skipped
     pub timestamps: bool,
+    // the vector column of the parent, instead of `foreign_key`
+    pub nearest: Option<String>,
 }
 
 impl Relation {
@@ -307,6 +310,7 @@ pub fn plan(tables: &[Table], dialect: Dialect) -> Plan {
                     foreign_key: key.column.clone(),
                     through: None,
                     timestamps: soft_deletes(&parent.table) && soft_deletes(&child.table),
+                    nearest: None,
                 });
             }
         }
@@ -332,6 +336,28 @@ pub fn plan(tables: &[Table], dialect: Dialect) -> Plan {
                         child_key: to.column.clone(),
                     }),
                     timestamps: soft_deletes(&parent.table) && soft_deletes(&child.table) && soft_deletes(&table.name),
+                    nearest: None,
+                });
+            }
+        }
+    }
+    // `generate-model` searches a PostgreSQL model by the meaning of its text when it has a vector and a text field,
+    // its first vector being the one of the search: `GET /{model}/{id}/similar` lists the entities nearest to one
+    if dialect == Dialect::Postgres {
+        for model in &plan.models {
+            let vector = model.fields.iter().find(|(_, ty)| is_dense_vector(ty));
+            let text = model.fields.iter().any(|(_, ty)| ty == "String" || ty == "Option<String>");
+            if let (Some((vector, _)), true) = (vector, text) {
+                relations.push(Relation {
+                    parent: model.name.clone(),
+                    parent_table: model.table.clone(),
+                    child: model.name.clone(),
+                    child_table: model.table.clone(),
+                    name: "similar".to_string(),
+                    foreign_key: String::new(),
+                    through: None,
+                    timestamps: model.timestamps,
+                    nearest: Some(vector.clone()),
                 });
             }
         }
@@ -339,6 +365,11 @@ pub fn plan(tables: &[Table], dialect: Dialect) -> Plan {
     name_relations(&mut relations, &plan.models, &mut plan.warnings);
     plan.relations = relations;
     plan
+}
+
+// The vector type `generate-model` searches by, `pgvector::Vector` or optional
+fn is_dense_vector(ty: &str) -> bool {
+    ty == "pgvector::Vector" || ty == "Option<pgvector::Vector>"
 }
 
 // Names the models after their singular table, `books` gives `Book`,
@@ -360,10 +391,12 @@ fn name_relations(relations: &mut Vec<Relation>, models: &[Model], warnings: &mu
             modules.insert(relation.module());
             return true;
         }
-        let key = relation.foreign_key.strip_suffix("_id").unwrap_or(&relation.foreign_key);
-        relation.name = format!("{}_by_{}", relation.name, key);
-        if modules.insert(relation.module()) {
-            return true;
+        if relation.nearest.is_none() {
+            let key = relation.foreign_key.strip_suffix("_id").unwrap_or(&relation.foreign_key);
+            relation.name = format!("{}_by_{}", relation.name, key);
+            if modules.insert(relation.module()) {
+                return true;
+            }
         }
         warnings.push(format!("{}: relation {} of {} left out, its module is taken", relation.module(), relation.name, relation.parent));
         false
@@ -401,7 +434,8 @@ fn common_flags(args: &mut Vec<String>, dialect: Dialect, timestamps: bool, opti
 }
 
 // The `generate-model` command of each model, then the `generate-relation` command of each relation,
-// the fields are piped to `--fields` as `name:Type` lines, followed by the empty name ending them and the confirmation
+// the fields are piped to `--fields` as `name:Type` lines, followed by the empty name ending them and the confirmation,
+// which the search prompt of a vector takes instead: the prompts after it, then the confirmation, get their default
 pub fn commands(plan: &Plan, dialect: Dialect, options: &Options) -> Vec<Command> {
     let mut commands = Vec::new();
     for model in &plan.models {
@@ -412,23 +446,16 @@ pub fn commands(plan: &Plan, dialect: Dialect, options: &Options) -> Vec<Command
         commands.push(Command { args, stdin: Some(stdin) });
     }
     for relation in &plan.relations {
-        let mut args: Vec<String> = [
-            "generate-relation",
-            "--parent",
-            &relation.parent,
-            "--child",
-            &relation.child,
-            "--name",
-            &relation.name,
-            "--foreign-key",
-            &relation.foreign_key,
-            "--parent-table",
-            &relation.parent_table,
-            "--child-table",
-            &relation.child_table,
-        ]
-        .map(String::from)
-        .to_vec();
+        let key = match &relation.nearest {
+            Some(vector) => ["--nearest", vector],
+            None => ["--foreign-key", &relation.foreign_key],
+        };
+        let mut args: Vec<String> = ["generate-relation", "--parent", &relation.parent, "--child", &relation.child, "--name", &relation.name]
+            .into_iter()
+            .chain(key)
+            .chain(["--parent-table", &relation.parent_table, "--child-table", &relation.child_table])
+            .map(String::from)
+            .collect();
         if let Some(through) = &relation.through {
             args.extend(["--through", &through.model, "--through-table", &through.table, "--child-key", &through.child_key].map(String::from));
         }
@@ -633,6 +660,22 @@ mod tests {
         );
         assert_eq!(plan.relations[1].child_table, "books");
         assert_eq!(plan.relations[3].through, Some(Through { model: "ProjectCategory".into(), table: "project_category".into(), child_key: "category_id".into() }));
+    }
+
+    #[test]
+    fn a_searched_vector_gives_the_similar_relation() {
+        let tables = [
+            table("recipe", vec![id(), column("title", "text", false), column("embedding", "vector", true)], &[]),
+            // no text to compute the vector from, no search
+            table("point", vec![id(), column("embedding", "vector", false)], &[]),
+        ];
+        let plan = plan(&tables, Dialect::Postgres);
+        assert_eq!(plan.relations.len(), 1);
+        assert_eq!((plan.relations[0].module(), plan.relations[0].nearest.as_deref()), ("recipe_similar".into(), Some("embedding")));
+        assert_eq!(
+            commands(&plan, Dialect::Postgres, &Options::default())[2].args.join(" "),
+            "generate-relation --parent Recipe --child Recipe --name similar --nearest embedding --parent-table recipe --child-table recipe --sqlx --postgres"
+        );
     }
 
     #[test]

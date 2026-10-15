@@ -70,8 +70,8 @@
         const RELATION: &'static str = "slas";
 
         async fn list_related(id: Id, query: &TicketSlasQuery, state: &AppState) -> Result<Option<Vec<Sla>>> {
-            let offset = query.offset.unwrap_or(0) as i64;
-            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| (l as i64).min(MAX_LIMIT));
+            let offset = i64::try_from(query.offset.unwrap_or(0)).unwrap_or(i64::MAX);
+            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| i64::try_from(l).unwrap_or(i64::MAX).min(MAX_LIMIT));
             let models = sqlx::query_as::<_, Sla>(
                 "SELECT sla.* FROM sla JOIN ticketsla ON ticketsla.sla_id = sla.id WHERE ticketsla.ticket_id = $1 ORDER BY sla.id LIMIT $2 OFFSET $3",
             )

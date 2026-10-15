@@ -45,8 +45,8 @@ impl HasMany for PlaceNearby {
         if !(radius >= 0.0) {
             return Err(octopux::Error::BadRequest("the radius must be a positive number of meters".into()).into());
         }
-        let offset = query.offset.unwrap_or(0) as i64;
-        let limit = query.limit.map_or(DEFAULT_LIMIT, |l| (l as i64).min(MAX_LIMIT));
+        let offset = i64::try_from(query.offset.unwrap_or(0)).unwrap_or(i64::MAX);
+        let limit = query.limit.map_or(DEFAULT_LIMIT, |l| i64::try_from(l).unwrap_or(i64::MAX).min(MAX_LIMIT));
         // The point of the place, `None` when it does not exist
         let Some(origin) = sqlx::query_scalar::<_, octopux::postgis::Point>(
             "SELECT location FROM place WHERE id = $1 AND deleted_at IS NULL",

@@ -295,8 +295,12 @@ pub fn impl_sqlx_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 Ok(::std::boxed::Box::new(model))
             }
             async fn list(query: &#list_query, state: &#app_state) -> ::octopux::anyhow::Result<::std::vec::Vec<#name>> {
-                let offset = query.offset.unwrap_or(0) as i64;
-                let limit = query.limit.map_or(#default_limit, |l| (l as i64).min(#max_limit));
+                // converted without `as`, which would wrap a huge value to a negative one: SQLite
+                // reads a negative LIMIT as no limit at all
+                let offset = <i64 as ::std::convert::TryFrom<_>>::try_from(query.offset.unwrap_or(0)).unwrap_or(i64::MAX).max(0);
+                let limit = query.limit.map_or(#default_limit, |l| {
+                    <i64 as ::std::convert::TryFrom<_>>::try_from(l).unwrap_or(i64::MAX).min(#max_limit).max(0)
+                });
                 #list_body
                 Ok(models)
             }

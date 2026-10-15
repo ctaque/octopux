@@ -48,14 +48,17 @@
 //!
 //! ```ignore
 //!
-//! #[derive(Deserialize, SqlxFilter)]
+//! #[derive(Default, Deserialize, SqlxFilter)]
 //! #[sqlx_filter(database = "postgres")]
 //! struct ListQuery {
 //!     offset: Option<usize>,
 //!     limit: Option<usize>,
+//!     // set by the backend, from the embedding of a text: the clients never send a vector
 //!     #[sqlx_filter(column = "embedding", op = "nearest")]
-//!     near: Option<pgvector::Vector>,           // ?near=[0.12,-0.5,0.33]: ORDER BY embedding <=> $1
+//!     #[serde(skip)]
+//!     near: Option<pgvector::Vector>,           // ORDER BY embedding <=> $1
 //!     #[sqlx_filter(column = "embedding", op = "nearest", distance = "l2")]
+//!     #[serde(skip)]
 //!     near_l2: Option<pgvector::Vector>,        // ORDER BY embedding <-> $1
 //! }
 //! ```

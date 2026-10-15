@@ -243,6 +243,70 @@ async fn lists_pages_of_the_live_rows() {
     assert_eq!(names(page), ["c", "d"]);
 }
 
+// The `project` table paginated by at most 2 rows, by an unsigned or a signed list query
+#[derive(sqlx::FromRow, SqlxModel)]
+#[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
+#[sqlx_model(database = "sqlite", table = "project", pool = "db", max_limit = 2)]
+struct CappedProject {
+    id: Id,
+}
+
+#[derive(Deserialize)]
+struct SignedListQuery {
+    offset: Option<i64>,
+    limit: Option<i64>,
+}
+
+#[derive(sqlx::FromRow, SqlxModel)]
+#[http_find_list_delete(Id, FindQuery, SignedListQuery, DeleteQuery, AppState)]
+#[sqlx_model(database = "sqlite", table = "project", pool = "db", max_limit = 2)]
+struct SignedCappedProject {
+    id: Id,
+}
+
+// SQLite reads a negative LIMIT as no limit: a limit wrapping to a negative number must not lift `max_limit`
+#[actix_web::test]
+async fn huge_or_negative_limits_keep_the_max_limit() {
+    use octopux::Model;
+    let state = state().await;
+    let app = app!(state);
+    for name in ["a", "b", "c", "d"] {
+        let req = test::TestRequest::post().uri("/project").set_json(json!({ "name": name, "type": null })).to_request();
+        assert!(test::call_service(&app, req).await.status().is_success());
+    }
+    for limit in [usize::MAX, i64::MAX as usize + 1, 3] {
+        let models = <CappedProject as Model<Id, FindQuery, ListQuery, Vec<CappedProject>, DeleteQuery, CappedProject, AppState>>::list(
+            &ListQuery { offset: None, limit: Some(limit) },
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(models.into_iter().map(|p| p.id).collect::<Vec<_>>(), [1, 2], "limit {}", limit);
+    }
+    // an offset past i64::MAX skips every row instead of wrapping to a negative one
+    let models = <CappedProject as Model<Id, FindQuery, ListQuery, Vec<CappedProject>, DeleteQuery, CappedProject, AppState>>::list(
+        &ListQuery { offset: Some(usize::MAX), limit: None },
+        &state,
+    )
+    .await
+    .unwrap();
+    assert!(models.is_empty());
+
+    let signed = |offset, limit| {
+        let state = state.clone();
+        async move {
+            let query = SignedListQuery { offset, limit };
+            let models = <SignedCappedProject as Model<Id, FindQuery, SignedListQuery, Vec<SignedCappedProject>, DeleteQuery, SignedCappedProject, AppState>>::list(&query, &state)
+                .await
+                .unwrap();
+            models.into_iter().map(|p| p.id).collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(signed(None, Some(-1)).await, Vec::<i64>::new());
+    assert_eq!(signed(None, Some(i64::MIN)).await, Vec::<i64>::new());
+    assert_eq!(signed(Some(-5), Some(10)).await, [1, 2]);
+}
+
 #[actix_web::test]
 async fn hard_deletes_without_soft_delete() {
     let state = state().await;

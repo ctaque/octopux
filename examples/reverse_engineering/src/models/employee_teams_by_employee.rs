@@ -70,8 +70,8 @@
         const RELATION: &'static str = "teams_by_employee";
 
         async fn list_related(id: Id, query: &EmployeeTeamsByEmployeeQuery, state: &AppState) -> Result<Option<Vec<Team>>> {
-            let offset = query.offset.unwrap_or(0) as i64;
-            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| (l as i64).min(MAX_LIMIT));
+            let offset = i64::try_from(query.offset.unwrap_or(0)).unwrap_or(i64::MAX);
+            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| i64::try_from(l).unwrap_or(i64::MAX).min(MAX_LIMIT));
             let models = sqlx::query_as::<_, Team>(
                 "SELECT team.* FROM team JOIN teammember ON teammember.team_id = team.id WHERE teammember.employee_id = $1 ORDER BY team.id LIMIT $2 OFFSET $3",
             )

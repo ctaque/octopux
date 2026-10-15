@@ -47,7 +47,7 @@ impl HasMany for ArticleSimilar {
     const RELATION: &'static str = "similar";
 
     async fn list_related(id: Id, query: &ArticleSimilarQuery, state: &AppState) -> Result<Option<Vec<SimilarArticle>>> {
-        let limit = query.limit.map_or(DEFAULT_LIMIT, |l| (l as i64).min(MAX_LIMIT));
+        let limit = query.limit.map_or(DEFAULT_LIMIT, |l| i64::try_from(l).unwrap_or(i64::MAX).min(MAX_LIMIT));
         // The embedding of the article, `None` when it does not exist
         let Some(embedding) = sqlx::query_scalar::<_, Vector>(
             "SELECT embedding FROM article WHERE id = $1 AND deleted_at IS NULL",

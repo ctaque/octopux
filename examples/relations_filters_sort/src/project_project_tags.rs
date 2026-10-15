@@ -38,8 +38,8 @@
         const RELATION: &'static str = "project_tags";
 
         async fn list_related(id: Id, query: &ProjectProjectTagsQuery, state: &AppState) -> Result<Option<Vec<ProjectTags>>> {
-            let offset = query.offset.unwrap_or(0) as i64;
-            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| (l as i64).min(MAX_LIMIT));
+            let offset = i64::try_from(query.offset.unwrap_or(0)).unwrap_or(i64::MAX);
+            let limit = query.limit.map_or(DEFAULT_LIMIT, |l| i64::try_from(l).unwrap_or(i64::MAX).min(MAX_LIMIT));
             let models = sqlx::query_as::<_, ProjectTags>(
                 "SELECT projecttag.* FROM projecttag JOIN projecttags ON projecttags.project_tag_id = projecttag.id WHERE projecttags.project_id = $1 AND projecttag.deleted_at IS NULL AND projecttags.deleted_at IS NULL ORDER BY projecttag.id LIMIT $2 OFFSET $3",
             )
