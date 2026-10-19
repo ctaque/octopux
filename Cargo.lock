@@ -403,6 +403,7 @@ dependencies = [
  "apistos-schemars",
  "chrono",
  "pin-project",
+ "uuid",
 ]
 
 [[package]]
@@ -554,6 +555,7 @@ dependencies = [
  "static_assertions_next",
  "tempfile",
  "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -2976,6 +2978,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "uuid",
 ]
 
 [[package]]
@@ -4304,6 +4307,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4372,6 +4376,7 @@ dependencies = [
  "sqlx-core",
  "thiserror",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4407,6 +4412,7 @@ dependencies = [
  "stringprep",
  "thiserror",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -4433,6 +4439,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -5001,6 +5008,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "user_defined_pk"
+version = "0.27.0"
+dependencies = [
+ "actix-web",
+ "apistos",
+ "apistos-schemars",
+ "async-graphql",
+ "async-graphql-actix-web",
+ "chrono",
+ "octopux 0.27.0",
+ "serde",
+ "sqlx",
+ "uuid",
+]
+
+[[package]]
 name = "utf8-zero"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5023,6 +5046,12 @@ name = "uuid"
 version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "serde_core",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "vcpkg"

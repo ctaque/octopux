@@ -61,6 +61,13 @@ struct SqlxModelArgs {
     /// Field of the application state holding the sqlx pool
     #[darling(default)]
     pool: Option<String>,
+    /// The primary key column, `id` by default, a field of the model and of the updatable struct
+    #[darling(default)]
+    primary_key: Option<String>,
+    /// The function giving the primary key of an inserted row, `uuid::Uuid::new_v4` (only for `SqlxNewModel`),
+    /// the database generates it otherwise, unless the struct has a field of the primary key
+    #[darling(default)]
+    new_id: Option<syn::Path>,
     /// `created_at` and `updated_at` are set on insert, `updated_at` on update
     #[darling(default)]
     timestamps: bool,
@@ -80,6 +87,7 @@ struct SqlxModelArgs {
 }
 
 const DEFAULT_LIMIT: i64 = 20;
+const DEFAULT_PRIMARY_KEY: &str = "id";
 const MAX_LIMIT: i64 = 100;
 const TIMESTAMP_COLUMNS: [&str; 3] = ["created_at", "updated_at", "deleted_at"];
 
@@ -87,6 +95,8 @@ struct Config {
     database: Database,
     table: String,
     pool: syn::Ident,
+    primary_key: String,
+    new_id: Option<syn::Path>,
     timestamps: bool,
     soft_delete: bool,
     before_save: bool,
@@ -111,10 +121,19 @@ fn parse_config(ast: &syn::DeriveInput, derive: &str, default_table: impl FnOnce
         None => return Err(syn::Error::new_spanned(meta, format!("{} requires `table` or `model`", derive))),
     };
     let pool = syn::parse_str(args.pool.as_deref().unwrap_or("pool"))?;
+    let primary_key = args.primary_key.clone().unwrap_or_else(|| DEFAULT_PRIMARY_KEY.to_string());
+    if primary_key.is_empty() || !is_column_name(&primary_key) {
+        return Err(syn::Error::new_spanned(
+            meta,
+            format!("`{}` is not a valid primary key column, use only latin letters (a-z, A-Z), digits and `_`", primary_key),
+        ));
+    }
     Ok(Config {
         database,
         table,
         pool,
+        primary_key,
+        new_id: args.new_id,
         timestamps: args.timestamps,
         soft_delete: args.soft_delete,
         before_save: args.before_save,
@@ -153,12 +172,28 @@ pub(crate) fn column(field: &syn::Ident) -> String {
     field.unraw().to_string()
 }
 
-fn require_id(ast: &syn::DeriveInput, fields: &[&syn::Ident], derive: &str) -> syn::Result<()> {
-    if fields.iter().any(|f| *f == "id") {
+// The field of the primary key column
+fn primary_key_field<'a>(ast: &syn::DeriveInput, fields: &[&'a syn::Ident], config: &Config, derive: &str) -> syn::Result<&'a syn::Ident> {
+    fields.iter().copied().find(|f| column(f) == config.primary_key).ok_or_else(|| {
+        syn::Error::new_spanned(&ast.ident, format!("{} requires an `{}` field, the primary key", derive, config.primary_key))
+    })
+}
+
+// The `primary_key` of the `#[sqlx_model(...)]` attribute, None without it, the other arguments being left to the sqlx derives
+pub(crate) fn primary_key(ast: &syn::DeriveInput) -> syn::Result<Option<String>> {
+    let Some(attr) = find_attr(ast, "sqlx_model") else {
+        return Ok(None);
+    };
+    let mut primary_key = None;
+    attr.parse_nested_meta(|meta| {
+        if meta.path.is_ident("primary_key") {
+            primary_key = Some(meta.value()?.parse::<syn::LitStr>()?.value());
+        } else if meta.input.peek(syn::Token![=]) {
+            meta.value()?.parse::<syn::Expr>()?;
+        }
         Ok(())
-    } else {
-        Err(syn::Error::new_spanned(&ast.ident, format!("{} requires an `id` field, the primary key", derive)))
-    }
+    })?;
+    Ok(primary_key)
 }
 
 fn not_deleted(config: &Config) -> &'static str {
@@ -180,33 +215,37 @@ fn this(config: &Config, app_state: &syn::Ident) -> TokenStream {
 
 pub fn impl_sqlx_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
     const DERIVE: &str = "SqlxModel";
-    let HttpFindListDeleteDeriveParams(id, find_query, list_query, delete_query, app_state) =
+    let HttpFindListDeleteDeriveParams(id_type, find_query, list_query, delete_query, app_state) =
         parse_http_attr(ast, "http_find_list_delete", DERIVE)?;
     let name = &ast.ident;
     let config = parse_config(ast, DERIVE, |_| Some(name.to_string().to_lowercase()))?;
+    if let Some(new_id) = &config.new_id {
+        return Err(syn::Error::new_spanned(new_id, "`new_id` is only read by SqlxNewModel"));
+    }
     let fields = named_fields(ast, DERIVE)?;
-    require_id(ast, &fields, DERIVE)?;
+    let id = primary_key_field(ast, &fields, &config, DERIVE)?;
     let db = config.database;
-    let (table, pool) = (&config.table, &config.pool);
+    let (table, pool, pk) = (&config.table, &config.pool, &config.primary_key);
     let p = db.placeholders(1, 3);
 
-    let find_sql = format!("SELECT * FROM {} WHERE id = {}{}", table, p[0], not_deleted(&config));
+    let find_sql = format!("SELECT * FROM {} WHERE {} = {}{}", table, pk, p[0], not_deleted(&config));
     let list_sql = format!(
-        "SELECT * FROM {}{} ORDER BY id LIMIT {} OFFSET {}",
+        "SELECT * FROM {}{} ORDER BY {} LIMIT {} OFFSET {}",
         table,
         if config.soft_delete { " WHERE deleted_at IS NULL" } else { "" },
+        pk,
         p[0],
         p[1]
     );
-    let select_by_id = format!("SELECT * FROM {} WHERE id = {}", table, p[0]);
+    let select_by_id = format!("SELECT * FROM {} WHERE {} = {}", table, pk, p[0]);
     let now = now();
     let delete_body = match (config.soft_delete, db.returning()) {
         (true, true) => {
-            let sql = format!("UPDATE {} SET deleted_at = {} WHERE id = {}{} RETURNING *", table, p[0], p[1], not_deleted(&config));
+            let sql = format!("UPDATE {} SET deleted_at = {} WHERE {} = {}{} RETURNING *", table, p[0], pk, p[1], not_deleted(&config));
             quote! {
                 let model = ::octopux::__private::sqlx::query_as::<_, #name>(#sql)
                     .bind(#now)
-                    .bind(&self.id)
+                    .bind(&self.#id)
                     .fetch_one(&state.#pool)
                     .await?;
             }
@@ -214,45 +253,45 @@ pub fn impl_sqlx_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
         // the row is selected after its update, which fails when it was already deleted,
         // in the same transaction
         (true, false) => {
-            let sql = format!("UPDATE {} SET deleted_at = {} WHERE id = {}{}", table, p[0], p[1], not_deleted(&config));
+            let sql = format!("UPDATE {} SET deleted_at = {} WHERE {} = {}{}", table, p[0], pk, p[1], not_deleted(&config));
             quote! {
                 let mut tx = state.#pool.begin().await?;
                 let result = ::octopux::__private::sqlx::query(#sql)
                     .bind(#now)
-                    .bind(&self.id)
+                    .bind(&self.#id)
                     .execute(&mut *tx)
                     .await?;
                 if result.rows_affected() == 0 {
                     return Err(::octopux::Error::NotFound.into());
                 }
                 let model = ::octopux::__private::sqlx::query_as::<_, #name>(#select_by_id)
-                    .bind(&self.id)
+                    .bind(&self.#id)
                     .fetch_one(&mut *tx)
                     .await?;
                 tx.commit().await?;
             }
         }
         (false, true) => {
-            let sql = format!("DELETE FROM {} WHERE id = {} RETURNING *", table, p[0]);
+            let sql = format!("DELETE FROM {} WHERE {} = {} RETURNING *", table, pk, p[0]);
             quote! {
                 let model = ::octopux::__private::sqlx::query_as::<_, #name>(#sql)
-                    .bind(&self.id)
+                    .bind(&self.#id)
                     .fetch_one(&state.#pool)
                     .await?;
             }
         }
         // the row is selected before its deletion, locked until the transaction commits
         (false, false) => {
-            let sql = format!("DELETE FROM {} WHERE id = {}", table, p[0]);
+            let sql = format!("DELETE FROM {} WHERE {} = {}", table, pk, p[0]);
             let select_for_update = format!("{} FOR UPDATE", select_by_id);
             quote! {
                 let mut tx = state.#pool.begin().await?;
                 let model = ::octopux::__private::sqlx::query_as::<_, #name>(#select_for_update)
-                    .bind(&self.id)
+                    .bind(&self.#id)
                     .fetch_one(&mut *tx)
                     .await?;
                 ::octopux::__private::sqlx::query(#sql)
-                    .bind(&self.id)
+                    .bind(&self.#id)
                     .execute(&mut *tx)
                     .await?;
                 tx.commit().await?;
@@ -265,12 +304,13 @@ pub fn impl_sqlx_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
         let select = format!("SELECT * FROM {}{}", table, if config.soft_delete { " WHERE deleted_at IS NULL" } else { "" });
         let soft_delete = config.soft_delete;
         let sqlx_db = db.sqlx_type();
+        let order_by = format!(" ORDER BY {}", pk);
         quote! {
             let mut qb = ::octopux::__private::sqlx::QueryBuilder::<#sqlx_db>::new(#select);
             let mut has_where = #soft_delete;
             ::octopux::SqlxFilter::<#sqlx_db>::push_filters(query, &mut qb, &mut has_where);
             if !::octopux::SqlxFilter::<#sqlx_db>::push_order_by(query, &mut qb)? {
-                qb.push(" ORDER BY id");
+                qb.push(#order_by);
             }
             qb.push(" LIMIT ").push_bind(limit).push(" OFFSET ").push_bind(offset);
             let models = qb.build_query_as::<#name>().fetch_all(&state.#pool).await?;
@@ -286,8 +326,8 @@ pub fn impl_sqlx_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
     };
     Ok(quote! {
         #[::octopux::__private::async_trait]
-        impl ::octopux::Model<#id, #find_query, #list_query, ::std::vec::Vec<#name>, #delete_query, #name, #app_state> for #name {
-            async fn find(id: #id, _query: &#find_query, state: &#app_state) -> ::octopux::anyhow::Result<::std::boxed::Box<#name>> {
+        impl ::octopux::Model<#id_type, #find_query, #list_query, ::std::vec::Vec<#name>, #delete_query, #name, #app_state> for #name {
+            async fn find(id: #id_type, _query: &#find_query, state: &#app_state) -> ::octopux::anyhow::Result<::std::boxed::Box<#name>> {
                 let model = ::octopux::__private::sqlx::query_as::<_, #name>(#find_sql)
                     .bind(id)
                     .fetch_one(&state.#pool)
@@ -324,10 +364,23 @@ pub fn impl_sqlx_new_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
     })?;
     let fields = named_fields(ast, DERIVE)?;
     let db = config.database;
-    let (table, pool) = (&config.table, &config.pool);
+    let (table, pool, pk) = (&config.table, &config.pool, &config.primary_key);
+    // the primary key given by the payload
+    let payload_id = fields.iter().find(|f| column(f) == *pk);
+    if let (Some(new_id), Some(_)) = (&config.new_id, payload_id) {
+        return Err(syn::Error::new_spanned(new_id, format!("`new_id` gives the `{}` the struct already has", pk)));
+    }
 
     let mut columns: Vec<String> = fields.iter().map(|f| column(f)).collect();
     let mut binds: Vec<TokenStream> = fields.iter().map(|f| quote! { .bind(&this.#f) }).collect();
+    let new_id = match &config.new_id {
+        Some(path) => {
+            columns.insert(0, pk.clone());
+            binds.insert(0, quote! { .bind(&new_id) });
+            quote! { let new_id = #path(); }
+        }
+        None => quote! {},
+    };
     // created_at and updated_at get the same value
     if config.timestamps {
         columns.extend(["created_at".to_string(), "updated_at".to_string()]);
@@ -362,8 +415,14 @@ pub fn impl_sqlx_new_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 .await?;
         }
     } else {
-        // the inserted row is selected in the same transaction
-        let select = format!("SELECT * FROM {} WHERE id = ?", table);
+        // the inserted row is selected in the same transaction, by the primary key given,
+        // or else generated by the AUTO_INCREMENT of the column
+        let select = format!("SELECT * FROM {} WHERE {} = ?", table, pk);
+        let inserted_id = match (&config.new_id, payload_id) {
+            (Some(_), _) => quote! { &new_id },
+            (None, Some(f)) => quote! { &this.#f },
+            (None, None) => quote! { result.last_insert_id() },
+        };
         quote! {
             let mut tx = state.#pool.begin().await?;
             let result = ::octopux::__private::sqlx::query(#insert)
@@ -371,7 +430,7 @@ pub fn impl_sqlx_new_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 .execute(&mut *tx)
                 .await?;
             let model = ::octopux::__private::sqlx::query_as::<_, #model>(#select)
-                .bind(result.last_insert_id())
+                .bind(#inserted_id)
                 .fetch_one(&mut *tx)
                 .await?;
             tx.commit().await?;
@@ -384,6 +443,7 @@ pub fn impl_sqlx_new_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
             async fn save(self: Self, _query: &#save_query, state: &#app_state) -> ::octopux::anyhow::Result<#model> {
                 #this
                 #now
+                #new_id
                 #body
                 Ok(model)
             }
@@ -393,18 +453,21 @@ pub fn impl_sqlx_new_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
 
 pub fn impl_sqlx_updatable_model(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
     const DERIVE: &str = "SqlxUpdatableModel";
-    let HttpUpdateDeriveParams(_id, update_query, output, _find_query, app_state) = parse_http_attr(ast, "http_update", DERIVE)?;
+    let HttpUpdateDeriveParams(_id_type, update_query, output, _find_query, app_state) = parse_http_attr(ast, "http_update", DERIVE)?;
     let name = &ast.ident;
     let config = parse_config(ast, DERIVE, |_| Some(output.to_string().to_lowercase()))?;
+    if let Some(new_id) = &config.new_id {
+        return Err(syn::Error::new_spanned(new_id, "`new_id` is only read by SqlxNewModel"));
+    }
     let fields = named_fields(ast, DERIVE)?;
-    require_id(ast, &fields, DERIVE)?;
+    let id = primary_key_field(ast, &fields, &config, DERIVE)?;
     let db = config.database;
-    let (table, pool) = (&config.table, &config.pool);
+    let (table, pool, pk) = (&config.table, &config.pool, &config.primary_key);
 
     // with timestamps, the timestamp columns are not taken from the payload
     let set: Vec<&&syn::Ident> = fields
         .iter()
-        .filter(|f| **f != "id" && !(config.timestamps && TIMESTAMP_COLUMNS.contains(&column(f).as_str())))
+        .filter(|f| column(f) != *pk && !(config.timestamps && TIMESTAMP_COLUMNS.contains(&column(f).as_str())))
         .collect();
     let mut columns: Vec<String> = set.iter().map(|f| column(f)).collect();
     let mut binds: Vec<TokenStream> = set.iter().map(|f| quote! { .bind(&this.#f) }).collect();
@@ -414,15 +477,16 @@ pub fn impl_sqlx_updatable_model(ast: &syn::DeriveInput) -> syn::Result<TokenStr
         binds.push(quote! { .bind(#now) });
     }
     if columns.is_empty() {
-        return Err(syn::Error::new_spanned(name, "SqlxUpdatableModel requires a field to update besides `id`"));
+        return Err(syn::Error::new_spanned(name, format!("SqlxUpdatableModel requires a field to update besides `{}`", pk)));
     }
     let mut placeholders = db.placeholders(1, columns.len() + 1);
     let id_placeholder = placeholders.pop().unwrap_or_default();
     let assignments: Vec<String> = columns.iter().zip(&placeholders).map(|(c, p)| format!("{} = {}", c, p)).collect();
     let update = format!(
-        "UPDATE {} SET {} WHERE id = {}{}",
+        "UPDATE {} SET {} WHERE {} = {}{}",
         table,
         assignments.join(", "),
+        pk,
         id_placeholder,
         not_deleted(&config)
     );
@@ -433,23 +497,23 @@ pub fn impl_sqlx_updatable_model(ast: &syn::DeriveInput) -> syn::Result<TokenStr
         quote! {
             let model = ::octopux::__private::sqlx::query_as::<_, #name>(#sql)
                 #(#binds)*
-                .bind(&this.id)
+                .bind(&this.#id)
                 .fetch_one(&state.#pool)
                 .await?;
         }
     } else {
         // the updated row is selected in the same transaction, a missing row answering 404:
         // MySQL counts as affected only the rows whose values changed
-        let select = format!("SELECT {} FROM {} WHERE id = ?{}", returned.join(", "), table, not_deleted(&config));
+        let select = format!("SELECT {} FROM {} WHERE {} = ?{}", returned.join(", "), table, pk, not_deleted(&config));
         quote! {
             let mut tx = state.#pool.begin().await?;
             ::octopux::__private::sqlx::query(#update)
                 #(#binds)*
-                .bind(&this.id)
+                .bind(&this.#id)
                 .execute(&mut *tx)
                 .await?;
             let model = ::octopux::__private::sqlx::query_as::<_, #name>(#select)
-                .bind(&this.id)
+                .bind(&this.#id)
                 .fetch_one(&mut *tx)
                 .await?;
             tx.commit().await?;
@@ -659,6 +723,96 @@ mod tests {
             struct UpdatableProject { id: Id, line2_total: i32, r#type: i32 }
         });
         assert!(!updatable.starts_with("error"), "{}", updatable);
+    }
+
+    #[test]
+    fn primary_key_replaces_the_id() {
+        let model = expand(impl_sqlx_model, syn::parse_quote! {
+            #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
+            #[sqlx_model(database = "postgres", primary_key = "version", soft_delete)]
+            struct Migration { version: Id, description: String }
+        });
+        assert!(model.contains("\"SELECT * FROM migration WHERE version = $1 AND deleted_at IS NULL\""), "{}", model);
+        assert!(model.contains("\"SELECT * FROM migration WHERE deleted_at IS NULL ORDER BY version LIMIT $1 OFFSET $2\""), "{}", model);
+        assert!(model.contains("\"UPDATE migration SET deleted_at = $1 WHERE version = $2 AND deleted_at IS NULL RETURNING *\""), "{}", model);
+        assert!(model.contains(". bind (& self . version)"), "{}", model);
+        let filter = expand(impl_sqlx_model, syn::parse_quote! {
+            #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
+            #[sqlx_model(database = "mysql", primary_key = "version", filter)]
+            struct Migration { version: Id }
+        });
+        assert!(filter.contains("qb . push (\" ORDER BY version\")"), "{}", filter);
+        assert!(filter.contains("\"SELECT * FROM migration WHERE version = ? FOR UPDATE\""), "{}", filter);
+        let updatable = expand(impl_sqlx_updatable_model, syn::parse_quote! {
+            #[http_update(Id, UpdateQuery, Migration, FindQuery, AppState)]
+            #[sqlx_model(database = "mysql", primary_key = "version")]
+            struct UpdatableMigration { version: Id, id: i32 }
+        });
+        assert!(updatable.contains("\"UPDATE migration SET id = ? WHERE version = ?\""), "{}", updatable);
+        assert!(updatable.contains("\"SELECT version, id FROM migration WHERE version = ?\""), "{}", updatable);
+        assert!(updatable.contains(". bind (& this . version)"), "{}", updatable);
+    }
+
+    #[test]
+    fn primary_key_is_a_field_and_a_column() {
+        let missing = expand(impl_sqlx_model, syn::parse_quote! {
+            #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
+            #[sqlx_model(database = "sqlite", primary_key = "version")]
+            struct Migration { id: Id }
+        });
+        assert!(missing.starts_with("error: SqlxModel requires an `version` field"), "{}", missing);
+        let invalid = expand(impl_sqlx_model, syn::parse_quote! {
+            #[http_find_list_delete(Id, FindQuery, ListQuery, DeleteQuery, AppState)]
+            #[sqlx_model(database = "sqlite", primary_key = "id; DROP TABLE x")]
+            struct Migration { id: Id }
+        });
+        assert!(invalid.contains("is not a valid primary key column"), "{}", invalid);
+    }
+
+    #[test]
+    fn new_model_inserts_the_new_id() {
+        let postgres = expand(impl_sqlx_new_model, syn::parse_quote! {
+            #[http_create(SaveQuery, AppState)]
+            #[sqlx_model(database = "postgres", model = "Project", new_id = "uuid::Uuid::new_v4")]
+            struct NewProject { name: String }
+        });
+        assert!(postgres.contains("\"INSERT INTO project (id, name) VALUES ($1, $2) RETURNING *\""), "{}", postgres);
+        assert!(postgres.contains("let new_id = uuid :: Uuid :: new_v4 () ;"), "{}", postgres);
+        assert!(postgres.contains(". bind (& new_id) . bind (& this . name)"), "{}", postgres);
+        let mysql = expand(impl_sqlx_new_model, syn::parse_quote! {
+            #[http_create(SaveQuery, AppState)]
+            #[sqlx_model(database = "mysql", model = "Project", primary_key = "uuid", new_id = "uuid::Uuid::new_v4")]
+            struct NewProject { name: String }
+        });
+        assert!(mysql.contains("\"INSERT INTO project (uuid, name) VALUES (?, ?)\""), "{}", mysql);
+        assert!(mysql.contains("\"SELECT * FROM project WHERE uuid = ?\""), "{}", mysql);
+        assert!(mysql.contains(". bind (& new_id) . fetch_one"), "{}", mysql);
+        assert!(!mysql.contains("last_insert_id"), "{}", mysql);
+        let both = expand(impl_sqlx_new_model, syn::parse_quote! {
+            #[http_create(SaveQuery, AppState)]
+            #[sqlx_model(database = "mysql", model = "Project", new_id = "uuid::Uuid::new_v4")]
+            struct NewProject { id: Id, name: String }
+        });
+        assert!(both.starts_with("error: `new_id` gives the `id` the struct already has"), "{}", both);
+        let updatable = expand(impl_sqlx_updatable_model, syn::parse_quote! {
+            #[http_update(Id, UpdateQuery, Project, FindQuery, AppState)]
+            #[sqlx_model(database = "mysql", new_id = "uuid::Uuid::new_v4")]
+            struct UpdatableProject { id: Id, name: String }
+        });
+        assert!(updatable.starts_with("error: `new_id` is only read by SqlxNewModel"), "{}", updatable);
+    }
+
+    #[test]
+    fn mysql_new_model_selects_the_primary_key_of_the_payload() {
+        let out = expand(impl_sqlx_new_model, syn::parse_quote! {
+            #[http_create(SaveQuery, AppState)]
+            #[sqlx_model(database = "mysql", model = "Migration", primary_key = "version")]
+            struct NewMigration { version: i64, description: String }
+        });
+        assert!(out.contains("\"INSERT INTO migration (version, description) VALUES (?, ?)\""), "{}", out);
+        assert!(out.contains("\"SELECT * FROM migration WHERE version = ?\""), "{}", out);
+        assert!(out.contains(". bind (& this . version) . fetch_one"), "{}", out);
+        assert!(!out.contains("last_insert_id"), "{}", out);
     }
 
     #[test]

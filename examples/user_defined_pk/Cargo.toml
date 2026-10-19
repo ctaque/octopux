@@ -1,0 +1,20 @@
+[package]
+name = "user_defined_pk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+
+[dependencies]
+actix-web = "4"
+apistos = { version = "0.9", features = ["chrono", "uuid", "swagger-ui"] }
+async-graphql = { version = "7", features = ["chrono", "uuid"] }
+async-graphql-actix-web = "7"
+chrono = { version = "0.4", features = ["serde"] }
+octopux = { workspace = true, features = ["openapi", "sqlx", "graphql"] }
+schemars = { version = "0.8", package = "apistos-schemars", features = ["uuid1"] }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "macros", "migrate"] }
+uuid = { version = "1", features = ["v4", "serde"] }

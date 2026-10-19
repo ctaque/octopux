@@ -52,8 +52,9 @@ async-graphql.workspace = true
 schemars.workspace = true
 chrono.workspace = true
 
-# MySQL, to type check the MySQL queries of the sqlx derives
-sqlx = { workspace = true, features = ["mysql"] }
+# MySQL, to type check the MySQL queries of the sqlx derives, and the UUID primary keys
+sqlx = { workspace = true, features = ["mysql", "uuid"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
 [[test]]
 name = "openapi"
