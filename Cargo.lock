@@ -5009,7 +5009,7 @@ dependencies = [
 
 [[package]]
 name = "user_defined_pk"
-version = "0.28.0"
+version = "0.0.0"
 dependencies = [
  "actix-web",
  "apistos",
