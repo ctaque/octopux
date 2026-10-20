@@ -15,6 +15,7 @@ version = "0.28.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ctaque/octopux"
+homepage = "https://ctaque.github.io/octopux/"
 authors = ["Cyprien Taque"]
 readme = "README.md"
 

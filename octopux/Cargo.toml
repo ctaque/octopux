@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Generate JSON REST APIs for Actix with minimal boilerplate"
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 authors.workspace = true
 readme.workspace = true
 keywords = ["actix", "crud", "rest", "api", "openapi"]
