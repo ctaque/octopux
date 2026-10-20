@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.28.1"
+version = "0.28.2"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ctaque/octopux"
@@ -24,8 +24,8 @@ strip = false
 
 [workspace.dependencies]
 # Crates internes
-octopux = { version = "0.28.1", path = "octopux" }
-octopux-derive = { version = "0.28.1", path = "octopux-derive" }
+octopux = { version = "0.28.2", path = "octopux" }
+octopux-derive = { version = "0.28.2", path = "octopux-derive" }
 
 # Dépendances externes
 actix-web = "4"
