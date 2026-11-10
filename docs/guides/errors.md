@@ -14,7 +14,7 @@ Errors are answered in JSON, with a stable `code` to match on:
 
 | Status | `code` | When |
 | --- | --- | --- |
-| 400 | `ID_MISMATCH` | The `id` of the `PUT` payload differs from the `id` of the path |
+| 400 | `ID_MISMATCH` | The primary key of the `PUT` payload (`id` by default) differs from the id of the path |
 | 400 | `BAD_REQUEST` | Invalid sort, `NOT NULL` or `CHECK` constraint violated, or `Error::BadRequest` |
 | 404 | `ENTITY_NOT_FOUND` | No entity has this id (`sqlx::Error::RowNotFound`, or `Error::NotFound`) |
 | 409 | `CONFLICT` | Unique or foreign key constraint violated, or `Error::Conflict` |

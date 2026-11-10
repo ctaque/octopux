@@ -208,9 +208,11 @@ fn impl_http_update_macro(ast: &syn::DeriveInput) -> SynResult<proc_macro2::Toke
 
     let name = &ast.ident;
     // The path id identifies the entity to update: reject payloads targeting another one.
-    let id_check = if has_named_field(ast, "id") {
+    // The id is the field of the primary key of the sqlx derives, `id` by default
+    let primary_key = sqlx_model::primary_key(ast)?.unwrap_or_else(|| "id".to_string());
+    let id_check = if let Some(field) = named_field(ast, &primary_key) {
         quote! {
-            if to_update.id != info.id {
+            if to_update.#field != info.id {
                 return ::octopux::__private::actix_web::ResponseError::error_response(&::octopux::Error::IdMismatch);
             }
         }
@@ -292,10 +294,16 @@ fn parse_http_attr<T: syn::parse::Parse>(ast: &syn::DeriveInput, name: &str, der
     attr.parse_args()
 }
 
+#[cfg(test)]
 fn has_named_field(ast: &syn::DeriveInput, field: &str) -> bool {
+    named_field(ast, field).is_some()
+}
+
+// The identifier of the field of the column `column`, `r#type` for `type`
+fn named_field<'a>(ast: &'a syn::DeriveInput, column: &str) -> Option<&'a syn::Ident> {
     match &ast.data {
-        syn::Data::Struct(data) => data.fields.iter().any(|f| f.ident.as_ref().map_or(false, |i| i == field)),
-        _ => false,
+        syn::Data::Struct(data) => data.fields.iter().filter_map(|f| f.ident.as_ref()).find(|i| sqlx_model::column(i) == column),
+        _ => None,
     }
 }
 
@@ -422,6 +430,27 @@ mod tests {
         });
         assert!(!update.contains("find"), "{}", update);
         assert!(update.contains("to_update . update (& params , & state)"), "{}", update);
+    }
+
+    #[test]
+    fn http_update_checks_the_primary_key_of_the_sqlx_derives() {
+        let id = expand(impl_http_update_macro, syn::parse_quote! {
+            #[http_update(Id, UpdateQuery, Item, FindQuery, AppState)]
+            struct UpdatableItem { id: Id, content: String }
+        });
+        assert!(id.contains("to_update . id != info . id"), "{}", id);
+        let version = expand(impl_http_update_macro, syn::parse_quote! {
+            #[http_update(Id, UpdateQuery, Item, FindQuery, AppState)]
+            #[sqlx_model(database = "postgres", primary_key = "version", timestamps)]
+            struct UpdatableItem { version: Id, id: i32, content: String }
+        });
+        assert!(version.contains("to_update . version != info . id"), "{}", version);
+        let without = expand(impl_http_update_macro, syn::parse_quote! {
+            #[http_update(Id, UpdateQuery, Item, FindQuery, AppState)]
+            #[sqlx_model(database = "postgres", primary_key = "version")]
+            struct UpdatableItem { id: Id, content: String }
+        });
+        assert!(!without.contains("IdMismatch"), "{}", without);
     }
 
     fn restful_info(args: proc_macro2::TokenStream) -> darling::Result<RestfulInfo> {

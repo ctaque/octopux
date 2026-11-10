@@ -47,6 +47,9 @@ pub struct Column {
     pub sql_type: String,
     pub nullable: bool,
     pub primary_key: bool,
+    // the database gives the column a value when an INSERT does not: a DEFAULT, an identity, an AUTO_INCREMENT
+    // or the INTEGER PRIMARY KEY of SQLite, the rowid
+    pub generated: bool,
 }
 
 // A single column foreign key, `column` referencing `references` of `table`
@@ -76,7 +79,7 @@ const SQLX_MIGRATIONS_TABLE: &str = "_sqlx_migrations";
 // The PostGIS columns are given with their geometry kind and SRID, `geometry(Point,4326)`, by `format_type`
 const POSTGRES_COLUMNS: &str = "SELECT c.table_name::text, c.column_name::text,
     CASE WHEN c.udt_name IN ('geometry', 'geography') THEN format_type(a.atttypid, a.atttypmod) ELSE c.udt_name::text END,
-    c.is_nullable = 'YES'
+    c.is_nullable = 'YES', c.column_default IS NOT NULL OR c.is_identity = 'YES'
 FROM information_schema.columns c
 JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
 JOIN pg_namespace n ON n.nspname = c.table_schema
@@ -109,6 +112,7 @@ ORDER BY 1, 2";
 // of a table without primary key
 const MYSQL_COLUMNS: &str = "SELECT CAST(c.TABLE_NAME AS CHAR), CAST(c.COLUMN_NAME AS CHAR), CAST(c.COLUMN_TYPE AS CHAR),
     CAST(c.IS_NULLABLE = 'YES' AS SIGNED),
+    CAST(c.EXTRA LIKE '%auto_increment%' OR c.COLUMN_DEFAULT IS NOT NULL AS SIGNED),
     CAST(EXISTS (SELECT 1 FROM information_schema.KEY_COLUMN_USAGE k
         WHERE k.TABLE_SCHEMA = c.TABLE_SCHEMA AND k.TABLE_NAME = c.TABLE_NAME AND k.COLUMN_NAME = c.COLUMN_NAME
         AND k.CONSTRAINT_NAME = 'PRIMARY') AS SIGNED)
@@ -232,8 +236,8 @@ impl Database {
                 .map_err(error)?;
                 let mut tables = Vec::new();
                 for name in names {
-                    let columns: Vec<(String, String, i64, i64)> =
-                        sqlx::query_as("SELECT name, type, \"notnull\", pk FROM pragma_table_info($1) ORDER BY cid")
+                    let columns: Vec<(String, String, i64, i64, bool)> =
+                        sqlx::query_as("SELECT name, type, \"notnull\", pk, dflt_value IS NOT NULL FROM pragma_table_info($1) ORDER BY cid")
                             .bind(&name)
                             .fetch_all(&mut *conn)
                             .await
@@ -252,14 +256,15 @@ impl Database {
                         .map_err(error)?;
                     // a primary key column holds NULL, unless it is NOT NULL, the INTEGER alias of the rowid
                     // or in a WITHOUT ROWID table (https://sqlite.org/lang_createtable.html#the_primary_key)
-                    let rowid_alias = columns.iter().filter(|(_, _, _, pk)| *pk > 0).count() == 1;
+                    let rowid_alias = columns.iter().filter(|(_, _, _, pk, _)| *pk > 0).count() == 1;
                     let mut table = Table {
                         name: name.clone(),
                         columns: columns
                             .into_iter()
-                            .map(|(name, sql_type, not_null, pk)| {
-                                let not_null = not_null != 0 || (pk > 0 && (without_rowid || (rowid_alias && sql_type.eq_ignore_ascii_case("INTEGER"))));
-                                Column { name, sql_type, nullable: !not_null, primary_key: pk > 0 }
+                            .map(|(name, sql_type, not_null, pk, default)| {
+                                let rowid = pk > 0 && !without_rowid && rowid_alias && sql_type.eq_ignore_ascii_case("INTEGER");
+                                let not_null = not_null != 0 || rowid || (pk > 0 && without_rowid);
+                                Column { name, sql_type, nullable: !not_null, primary_key: pk > 0, generated: rowid || default }
                             })
                             .collect(),
                         foreign_keys: Vec::new(),
@@ -273,12 +278,12 @@ impl Database {
                 Ok(tables)
             }
             Database::Postgres(conn) => {
-                let columns: Vec<(String, String, String, bool)> = sqlx::query_as(POSTGRES_COLUMNS).fetch_all(&mut *conn).await.map_err(error)?;
+                let columns: Vec<(String, String, String, bool, bool)> = sqlx::query_as(POSTGRES_COLUMNS).fetch_all(&mut *conn).await.map_err(error)?;
                 let primary_keys: Vec<(String, String)> = sqlx::query_as(POSTGRES_PRIMARY_KEYS).fetch_all(&mut *conn).await.map_err(error)?;
                 let keys: Vec<(String, String, String, String)> = sqlx::query_as(POSTGRES_FOREIGN_KEYS).fetch_all(&mut *conn).await.map_err(error)?;
-                let mut tables = group_columns(columns.into_iter().map(|(table, name, udt, nullable)| {
+                let mut tables = group_columns(columns.into_iter().map(|(table, name, udt, nullable, generated)| {
                     let primary_key = primary_keys.iter().any(|(t, c)| *t == table && *c == name);
-                    (table, Column { name, sql_type: udt, nullable, primary_key })
+                    (table, Column { name, sql_type: udt, nullable, primary_key, generated })
                 }));
                 // the query already left out the keys of several columns
                 let rows = keys.into_iter().map(|(table, column, rt, rc)| (table.clone(), column.clone(), column, rt, rc));
@@ -286,10 +291,10 @@ impl Database {
                 Ok(tables)
             }
             Database::Mysql(conn) => {
-                let columns: Vec<(String, String, String, i64, i64)> = sqlx::query_as(MYSQL_COLUMNS).fetch_all(&mut *conn).await.map_err(error)?;
+                let columns: Vec<(String, String, String, i64, i64, i64)> = sqlx::query_as(MYSQL_COLUMNS).fetch_all(&mut *conn).await.map_err(error)?;
                 let keys: Vec<(String, String, String, String, String)> = sqlx::query_as(MYSQL_FOREIGN_KEYS).fetch_all(&mut *conn).await.map_err(error)?;
-                let mut tables = group_columns(columns.into_iter().map(|(table, name, ty, nullable, pk)| {
-                    (table, Column { name, sql_type: ty.to_lowercase(), nullable: nullable != 0, primary_key: pk != 0 })
+                let mut tables = group_columns(columns.into_iter().map(|(table, name, ty, nullable, generated, pk)| {
+                    (table, Column { name, sql_type: ty.to_lowercase(), nullable: nullable != 0, primary_key: pk != 0, generated: generated != 0 })
                 }));
                 add_foreign_keys(&mut tables, keys);
                 Ok(tables)
@@ -329,7 +334,7 @@ mod tests {
                     FOREIGN KEY (a, b) REFERENCES pair (x, y)
                 );
                 CREATE TABLE tag (id BIGINT PRIMARY KEY, name TEXT);
-                CREATE TABLE label (id BIGINT PRIMARY KEY, name TEXT) WITHOUT ROWID;",
+                CREATE TABLE label (id BIGINT PRIMARY KEY, name TEXT DEFAULT 'none') WITHOUT ROWID;",
             )
             .execute(&mut *conn)
             .await
@@ -340,8 +345,11 @@ mod tests {
         // only an INTEGER primary key aliases the rowid, a BIGINT one holds NULL outside a WITHOUT ROWID table
         assert_eq!(tables[2].column("id").map(|c| c.nullable), Some(false));
         assert_eq!(tables[3].column("id").map(|c| c.nullable), Some(true));
+        // only the rowid and the columns with a default are generated
+        assert_eq!(tables[2].columns.iter().map(|c| c.generated).collect::<Vec<_>>(), [false, true]);
+        assert_eq!(tables[3].column("id").map(|c| c.generated), Some(false));
         let book = &tables[1];
-        assert_eq!(book.column("id"), Some(&Column { name: "id".into(), sql_type: "INTEGER".into(), nullable: false, primary_key: true }));
+        assert_eq!(book.column("id"), Some(&Column { name: "id".into(), sql_type: "INTEGER".into(), nullable: false, primary_key: true, generated: true }));
         assert_eq!(book.column("title").map(|c| c.nullable), Some(false));
         assert_eq!(book.column("author_id").map(|c| c.nullable), Some(true));
         // the key of two columns is left out, the implicit referenced column is the primary key
@@ -382,5 +390,7 @@ mod tests {
         let types: Vec<_> = book.columns.iter().map(|c| crate::plan::rust_type(Dialect::Mysql, &c.sql_type).unwrap()).collect();
         assert_eq!(types, ["i64", "bool", "u64", "u16", "bool"]);
         assert!(book.column("id").unwrap().primary_key);
+        assert!(book.column("id").unwrap().generated);
+        assert!(!setting.column("id").unwrap().generated);
     }
 }

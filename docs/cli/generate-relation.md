@@ -14,6 +14,7 @@ nav_order: 2
 | `--nearest <column>` | The nearest neighbours of the parent by their vectors instead of the children referencing it, `<column>` being the vector of the parent: see [below](#nearest-neighbour). Requires `--postgres --sqlx` |
 | `--sort <columns>` | The columns of the child the children can be sorted by, `title,created_at`: see [below](#sort). The fields of the child model by default |
 | `--name` | The route segment, `books` by default (`similar` or `nearest_<children>` with `--nearest`) |
+| `--parent-primary-key`, `--child-primary-key` | The primary keys of the models generated with `--primary-key`, `id` by default. `--nearest` needs `id` |
 | `--sqlx`, `--migration`, `--timestamps`, `--openapi`, `--graphql`, database flags, `--schema`, `--output`, `--force` | As for [`generate-model`]({{ '/cli/generate-model/' | relative_url }}) |
 
 ```bash
@@ -35,7 +36,7 @@ The route takes `offset` and `limit`, and with `--sqlx`, `sort` and `order`, as 
 curl 'localhost:8080/v1/project/1/books?sort=-created_at,title'
 ```
 
-The columns allowed are in the `SORT_COLUMNS` constant of the relation file, any other one being answered 400 `BAD_REQUEST`: those of `--sort`, or the fields of the child model, but those skipped by serde, the vectors, geometries and JSON values and `deleted_at`. `id` is always allowed, and ends the `ORDER BY` so that the pages neither overlap nor skip rows. With `--graphql`, the field of the relation takes `sort` and `order` too: `{ project(id: 1) { books(sort: "-created_at") { title } } }`.
+The columns allowed are in the `SORT_COLUMNS` constant of the relation file, any other one being answered 400 `BAD_REQUEST`: those of `--sort`, or the fields of the child model, but those skipped by serde, the vectors, geometries and JSON values and `deleted_at`. The primary key of the child (`--child-primary-key`, `id` by default) is always allowed, and ends the `ORDER BY` so that the pages neither overlap nor skip rows. With `--graphql`, the field of the relation takes `sort` and `order` too: `{ project(id: 1) { books(sort: "-created_at") { title } } }`.
 
 ## Nearest neighbour
 
