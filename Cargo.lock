@@ -1730,9 +1730,9 @@ dependencies = [
 
 [[package]]
 name = "fastembed"
-version = "7.5.0"
+version = "7.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b65a7054d36362ab4c234d7b4b58f3f453e9ec73643283223f0b170554481906"
+checksum = "44a9bc53955bbc057a9df08b50218b297ff24aa791f3559d0cce5696cdd425ab"
 dependencies = [
  "hf-hub",
  "ndarray",
@@ -4595,7 +4595,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
