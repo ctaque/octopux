@@ -1731,9 +1731,9 @@ dependencies = [
 
 [[package]]
 name = "fastembed"
-version = "7.7.0"
+version = "7.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7efdb63540aae5216307d11e08d75408cf0c2471aef7c10b1966eba7218b670b"
+checksum = "eb32b4b0b8ff326c8737805388b51cb326c698979ba1acb32412bdd3c52a274a"
 dependencies = [
  "hf-hub",
  "ndarray",
@@ -3037,28 +3037,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "onig"
-version = "6.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc3cbf698f9438986c11a880c90a6d04b9de27575afd28bbf45b154b6c709e2"
-dependencies = [
- "bitflags 2.13.2",
- "libc",
- "once_cell",
- "onig_sys",
-]
-
-[[package]]
-name = "onig_sys"
-version = "69.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e68317604e77e53b85896388e1a803c1d21b74c899ec9e5e1112db90735edd7"
-dependencies = [
- "cc",
- "pkg-config",
-]
 
 [[package]]
 name = "openapi"
@@ -4694,7 +4672,6 @@ dependencies = [
  "log",
  "macro_rules_attribute",
  "monostate",
- "onig",
  "paste",
  "rand 0.9.5",
  "rayon",
